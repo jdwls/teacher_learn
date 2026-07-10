@@ -1,0 +1,1144 @@
+import 'dart:io';
+import 'package:flutter/material.dart';
+import '../../../theme/app_theme.dart';
+import '../../../services/file_picker_service.dart';
+import '../../../models/question_models.dart';
+import '../controllers.dart';
+
+/// Mixin providing all operation question logic for the QuestionsPage
+mixin OperationQuestionMixin on State {
+  // ========== Operation Question State ==========
+  // These fields must be declared in the host state class:
+  //   List<OperationQuestion> _operationQuestions;
+  //   TextEditingController _operationQuestionController;
+  //   TextEditingController _operationScoreController;
+  //   int? _editingOperationIndex;
+  //   List<OperationFileController> _operationFileControllers;
+  //   List<OperationAnswerController> _operationAnswerControllers;
+  //   int _operationFileCount;
+  //   int _operationAnswerCount;
+  //   String? _selectedOperationFileName;
+  //   String? _selectedBank;
+
+  // ========== Stub Methods ==========
+
+  void saveQuestionsToFile() {
+    // This will be implemented in the host state class
+  }
+
+  // ========== File Helper Methods ==========
+
+  /// ćŞć­ćäťśĺćžç¤şďźčśčż7ä¸Şĺ­ćžç¤şççĽĺˇďź
+  String truncateFileName(String fileName) {
+    if (fileName.length > 7) {
+      return '${fileName.substring(0, 7)}...';
+    }
+    return fileName;
+  }
+
+  /// çććçŠşĺçĺĺ§ćäťśĺĺŽš
+  String generateHollowedContent(
+      String originalContent, List<int> linesToHollow) {
+    final lines = originalContent.split('\n');
+    final sortedLines = linesToHollow.toList()..sort((a, b) => b.compareTo(a));
+    for (final lineNum in sortedLines) {
+      final index = lineNum - 1;
+      if (index >= 0 && index < lines.length) {
+        lines[index] = '';
+      }
+    }
+    return lines.join('\n');
+  }
+
+  /// čˇĺĺŻç¨çĺĺ§ćäťśĺĺčĄ¨
+  List<String> getAvailableFileNames() {
+    final self = this as dynamic;
+    final controllers =
+        self.operationFileControllers as List<OperationFileController>;
+    final fileCount = self.operationFileCount as int;
+
+    final fileNames = <String>[];
+    for (int i = 0; i < fileCount; i++) {
+      if (i < controllers.length) {
+        final fileName = controllers[i].fileNameController.text;
+        if (fileName.isNotEmpty) {
+          fileNames.add(fileName);
+        }
+      }
+    }
+    return fileNames;
+  }
+
+  // ========== File Picking Methods ==========
+
+  Future<void> pickOperationFile(int index) async {
+    try {
+      final result = await FilePickerService.pickSingleFile();
+      if (result == null) return;
+
+      final self = this as dynamic;
+      final controllers =
+          self.operationFileControllers as List<OperationFileController>;
+
+      while (controllers.length <= index) {
+        controllers.add(OperationFileController());
+      }
+      final ctrl = controllers[index];
+
+      setState(() {
+        ctrl.sourceFilePath = result.filePath;
+        ctrl.fileNameController.text = result.fileName;
+        ctrl.fileNameController.text = result.content;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('ĺˇ˛éćŠćäťś: ${result.fileName}'),
+            backgroundColor: AppTheme.successGreen,
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('éćŠćäťśĺ¤ąč´Ľ: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void clearOperationFile(int index) {
+    final self = this as dynamic;
+    final controllers =
+        self.operationFileControllers as List<OperationFileController>;
+    if (index < controllers.length) {
+      final ctrl = controllers[index];
+      setState(() {
+        ctrl.sourceFilePath = null;
+        ctrl.fileNameController.clear();
+        ctrl.contentController.clear();
+      });
+    }
+  }
+
+  Future<void> pickBottomOperationFile() async {
+    try {
+      final result = await FilePickerService.pickAndCacheFile();
+      if (result == null) return;
+
+      final self = this as dynamic;
+      final controllers =
+          self.operationFileControllers as List<OperationFileController>;
+
+      while (controllers.length < 1) {
+        controllers.add(OperationFileController());
+      }
+
+      controllers[0].sourceFilePath = result.filePath;
+      controllers[0].cachePath = result.cachePath;
+      controllers[0].fileNameController.text = result.fileName;
+      controllers[0].fileNameController.text = result.content;
+
+      setState(() {
+        self.operationFileCount = 1;
+        self.selectedOperationFileName = result.fileName;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('ĺˇ˛éćŠćäťś: ${truncateFileName(result.fileName)}'),
+            backgroundColor: AppTheme.successGreen,
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('éćŠćäťśĺ¤ąč´Ľ: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> pickAnswerFile(int answerIndex) async {
+    try {
+      final result = await FilePickerService.pickSingleFile();
+      if (result == null) return;
+
+      final self = this as dynamic;
+      final controllers =
+          self.operationFileControllers as List<OperationFileController>;
+      final fileCount = self.operationFileCount as int;
+
+      while (controllers.length <= fileCount) {
+        controllers.add(OperationFileController());
+      }
+
+      final newIndex = fileCount;
+      controllers[newIndex].sourceFilePath = result.filePath;
+      controllers[newIndex].fileNameController.text = result.fileName;
+      controllers[newIndex].fileNameController.text = result.content;
+
+      setState(() {
+        self.operationFileCount = newIndex + 1;
+        final answerControllers =
+            self.operationAnswerControllers as List<OperationAnswerController>;
+        answerControllers[answerIndex].targetPathController.text =
+            result.fileName;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('ĺˇ˛éćŠćäťś: ${truncateFileName(result.fileName)}'),
+            backgroundColor: AppTheme.successGreen,
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('éćŠćäťśĺ¤ąč´Ľ: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void readLineFromInitialFile(int answerIndex, int lineCheckIndex) {
+    final self = this as dynamic;
+    final answerControllers =
+        self.operationAnswerControllers as List<OperationAnswerController>;
+    final answerCtrl = answerControllers[answerIndex];
+    final lineCheckCtrl = answerCtrl.lineCheckControllers[lineCheckIndex];
+    final lineNumber = int.tryParse(lineCheckCtrl.lineNumberController.text);
+    final selectedFileName = self.selectedOperationFileName as String?;
+
+    if (selectedFileName == null || selectedFileName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('čŻˇĺçšĺťĺşé¨"éćŠćäťś"ćéŽéćŠćäťś'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    if (lineNumber == null || lineNumber < 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('čŻˇčžĺĽććçčĄĺˇ'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    String? fileContent;
+    String? matchedFilePath;
+    final controllers =
+        self.operationFileControllers as List<OperationFileController>;
+    final fileCount = self.operationFileCount as int;
+
+    for (int i = 0; i < fileCount; i++) {
+      if (i < controllers.length) {
+        final ctrl = controllers[i];
+        if (ctrl.fileNameController.text == selectedFileName) {
+          fileContent = ctrl.fileNameController.text;
+          final editingIndex = self.editingOperationIndex as int?;
+          final questionId = editingIndex != null
+              ? 'é˘çŽ${editingIndex + 1}'
+              : 'é˘çŽ${(self.operationQuestions as List).length + 1}';
+          matchedFilePath =
+              'ćä˝é˘/$questionId/${ctrl.fileNameController.text}';
+          break;
+        }
+      }
+    }
+
+    if (fileContent == null || fileContent.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'ćŞćžĺ°ćäťśĺĺŽš: ${truncateFileName(selectedFileName)}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final lines = fileContent.split('\n');
+    if (lineNumber > lines.length) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('čĄĺˇčśĺşčĺ´ďźćäťśĺą ${lines.length} čĄ'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final lineContent = lines[lineNumber - 1].trim();
+    lineCheckCtrl.expectedContentController.text = lineContent;
+    if (matchedFilePath != null) {
+      lineCheckCtrl.filePathController.text = matchedFilePath;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('ĺˇ˛čŻťĺçŹŹ $lineNumber čĄĺĺŽš'),
+        backgroundColor: AppTheme.successGreen,
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
+  // ========== List Management Methods ==========
+
+  void addOperationFile() {
+    final self = this as dynamic;
+    setState(() {
+      self.operationFileCount++;
+    });
+  }
+
+  void removeOperationFile(int index) {
+    final self = this as dynamic;
+    final fileCount = self.operationFileCount as int;
+    if (fileCount > 1) {
+      setState(() {
+        self.operationFileCount--;
+        final controllers =
+            self.operationFileControllers as List<OperationFileController>;
+        if (index < controllers.length) {
+          controllers[index].dispose();
+          controllers.removeAt(index);
+        }
+      });
+    }
+  }
+
+  void addOperationAnswer() {
+    final self = this as dynamic;
+    setState(() {
+      self.operationAnswerCount++;
+      final index = (self.operationAnswerCount as int) - 1;
+      final answerControllers =
+          self.operationAnswerControllers as List<OperationAnswerController>;
+      while (answerControllers.length <= index) {
+        answerControllers.add(OperationAnswerController());
+      }
+      if (answerControllers[index].lineCheckControllers.isEmpty) {
+        answerControllers[index]
+            .lineCheckControllers
+            .add(OperationLineCheckController());
+      }
+    });
+  }
+
+  void removeOperationAnswer(int index) {
+    final self = this as dynamic;
+    final answerCount = self.operationAnswerCount as int;
+    if (answerCount > 1) {
+      setState(() {
+        self.operationAnswerCount--;
+        final answerControllers =
+            self.operationAnswerControllers as List<OperationAnswerController>;
+        if (index < answerControllers.length) {
+          answerControllers[index].dispose();
+          answerControllers.removeAt(index);
+        }
+      });
+    }
+  }
+
+  // ========== Save/Load/Delete Methods ==========
+
+  Future<void> saveOperationQuestion() async {
+    final self = this as dynamic;
+    final questionController =
+        self.operationQuestionController as TextEditingController;
+    final selectedBank = self.selectedBank as String?;
+    final editingIndex = self.editingOperationIndex as int?;
+    final operationQuestions =
+        self.operationQuestions as List<OperationQuestion>;
+    final fileCount = self.operationFileCount as int;
+    final controllers =
+        self.operationFileControllers as List<OperationFileController>;
+    final answerCount = self.operationAnswerCount as int;
+    final answerControllers =
+        self.operationAnswerControllers as List<OperationAnswerController>;
+    final selectedFileName = self.selectedOperationFileName as String?;
+
+    if (questionController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('čŻˇčžĺĽé˘çŽćčż°'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    if (selectedBank == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('čŻˇĺéćŠé˘ĺş'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // ćĺťşĺĺ§ćäťśďźćŻä¸ŞćäťśćĄçŽĺĺŤćäťśčˇŻĺžĺčĄćŁćĽäżĄćŻďź
+    final initialFiles = <OperationFile>[];
+
+    // äť answerControllers ä¸­ćĺćŁćĽéĄšäżĄćŻ
+    for (int i = 0; i < answerCount; i++) {
+      if (i < answerControllers.length) {
+        final ctrl = answerControllers[i];
+        final targetFile = ctrl.targetPathController.text.trim();
+        if (targetFile.isEmpty) continue;
+
+        for (int j = 0; j < ctrl.lineCheckControllers.length; j++) {
+          final lineCtrl = ctrl.lineCheckControllers[j];
+          final lineNumber = int.tryParse(lineCtrl.lineNumberController.text);
+          final expectedContent = lineCtrl.expectedContentController.text.trim();
+          final lineScore = int.tryParse(lineCtrl.scoreController.text) ?? 5;
+
+          if (lineNumber != null && lineNumber > 0 && expectedContent.isNotEmpty) {
+            initialFiles.add(OperationFile(
+              fileName: targetFile.split('/').last,
+              filePath: targetFile,
+              lineNumber: lineNumber,
+              expectedContent: expectedContent,
+              score: lineScore,
+            ));
+          }
+        }
+      }
+    }
+
+    if (initialFiles.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('čŻˇčłĺ°ćˇťĺ ä¸ä¸ŞććçćŁćĽéĄšďźćäťśčˇŻĺžăčĄĺˇĺććĺĺŽšďź'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    locClearOperationForm();
+  }
+
+  void locClearOperationForm() {
+    final self = this as dynamic;
+    final questionController =
+        self.operationQuestionController as TextEditingController;
+    final scoreController =
+        self.operationScoreController as TextEditingController;
+    final controllers =
+        self.operationFileControllers as List<OperationFileController>;
+    final answerControllers =
+        self.operationAnswerControllers as List<OperationAnswerController>;
+
+    questionController.clear();
+    scoreController.text = '10';
+    setState(() {
+      self.editingOperationIndex = null;
+      self.operationFileCount = 1;
+      self.operationAnswerCount = 1;
+      self.selectedOperationFileName = null;
+    });
+    for (final ctrl in controllers) {
+      ctrl.fileNameController.clear();
+      ctrl.contentController.clear();
+      ctrl.sourceFilePath = null;
+    }
+    for (final ctrl in answerControllers) {
+      ctrl.targetPathController.clear();
+      ctrl.keywordsController.clear();
+      ctrl.scoreController.text = '5';
+      for (final lineCtrl in ctrl.lineCheckControllers) {
+        lineCtrl.lineNumberController.clear();
+        lineCtrl.expectedContentController.clear();
+        lineCtrl.scoreController.text = '5';
+      }
+    }
+  }
+
+  void loadOperationQuestionToForm(int index) {
+    final self = this as dynamic;
+    final operationQuestions =
+        self.operationQuestions as List<OperationQuestion>;
+    final questionController =
+        self.operationQuestionController as TextEditingController;
+    final scoreController =
+        self.operationScoreController as TextEditingController;
+    final controllers =
+        self.operationFileControllers as List<OperationFileController>;
+    final answerControllers =
+        self.operationAnswerControllers as List<OperationAnswerController>;
+
+    final q = operationQuestions[index];
+    questionController.text = q.questionText;
+    scoreController.text = q.score.toString();
+
+    setState(() {
+      self.editingOperationIndex = index;
+      self.operationFileCount = q.initialFiles.length.clamp(1, 100);
+      self.operationAnswerCount = q.initialFiles.length.clamp(1, 100);
+    });
+
+    for (int i = 0; i < q.initialFiles.length; i++) {
+      if (i < controllers.length) {
+        final file = q.initialFiles[i];
+        controllers[i].fileNameController.text = file.fileName;
+        controllers[i].fileNameController.text = file.fileName;
+      }
+    }
+
+    for (int i = 0; i < q.initialFiles.length; i++) {
+      while (answerControllers.length <= i) {
+        answerControllers.add(OperationAnswerController());
+      }
+      final item = q.initialFiles[i];
+      // Fix: Use property access instead of [] operator on OperationFile object
+      answerControllers[i].targetPathController.text = item.filePath ?? '';
+      answerControllers[i].keywordsController.text = '';
+      answerControllers[i].scoreController.text = item.score.toString();
+
+      // OperationFile doesn't have checkLines, so we skip the loop
+      // that was trying to access item['checkLines']
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('ĺˇ˛ĺ č˝˝çŹŹ ${index + 1} é˘ĺ°çźčžĺş'),
+        backgroundColor: AppTheme.primaryBlue,
+      ),
+    );
+  }
+
+  Future<void> deleteOperationQuestion() async {
+    final self = this as dynamic;
+    final editingIndex = self.editingOperationIndex as int?;
+    final selectedBank = self.selectedBank as String?;
+    final operationQuestions =
+        self.operationQuestions as List<OperationQuestion>;
+
+    if (editingIndex == null) return;
+
+    final deletedIndex = editingIndex;
+    final questionId = 'é˘çŽ${deletedIndex + 1}';
+
+    if (selectedBank != null) {
+      try {
+        final targetDir =
+            '${Directory.current.path}/é˘ĺş/$selectedBank/ćä˝é˘/$questionId';
+        final dir = Directory(targetDir);
+        if (await dir.exists()) {
+          await dir.delete(recursive: true);
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    operationQuestions.removeAt(deletedIndex);
+    self.clearOperationForm();
+
+    if (selectedBank != null) {
+      self.saveQuestionsToFile();
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('ĺˇ˛ĺ é¤çŹŹ ${deletedIndex + 1} é˘'),
+        backgroundColor: Colors.grey,
+      ),
+    );
+  }
+
+  // ========== Operation Question UI ==========
+
+  Widget buildOperationQuestionForm() {
+    final self = this as dynamic;
+    final hasBank = (self.selectedBank as String?) != null;
+    final questionController =
+        self.operationQuestionController as TextEditingController;
+    final editingIndex = self.editingOperationIndex as int?;
+    final answerCount = self.operationAnswerCount as int;
+    final selectedFileName = self.selectedOperationFileName as String?;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: questionController,
+            enabled: hasBank,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: hasBank ? 'čŻˇčžĺĽćä˝é˘é˘çŽćčż°...' : 'čŻˇĺéćŠé˘ĺş',
+              labelText: 'é˘çŽćčż°',
+              filled: true,
+              fillColor: hasBank ? const Color(0xFFF8FAFC) : Colors.grey[200],
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppTheme.borderMain),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppTheme.borderMain),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    const BorderSide(color: AppTheme.primaryBlue, width: 2),
+              ),
+              disabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.green[50],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.green[200]!),
+            ),
+            child: SizedBox(
+              height: 250,
+              child: SingleChildScrollView(
+                child: Column(
+                  children: List.generate(answerCount, (index) {
+                    return buildOperationAnswerRow(index, hasBank);
+                  }),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            alignment: WrapAlignment.start,
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (editingIndex == null)
+                ElevatedButton.icon(
+                  onPressed: hasBank ? saveOperationQuestion : null,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('ćˇťĺ ćä˝é˘'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        hasBank ? AppTheme.primaryBlue : Colors.grey,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              if (editingIndex != null)
+                ElevatedButton.icon(
+                  onPressed: hasBank ? saveOperationQuestion : null,
+                  icon: const Icon(Icons.save, size: 18),
+                  label: const Text('äżĺ­'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: hasBank ? Colors.orange : Colors.grey,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              if (editingIndex != null) ...[
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: hasBank ? deleteOperationQuestion : null,
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: const Text('ĺ é¤é˘çŽ'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: hasBank
+                        ? Colors.red[400]
+                        : Colors.grey[300],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ],
+              ElevatedButton.icon(
+                onPressed: hasBank ? pickBottomOperationFile : null,
+                icon: Icon(
+                  selectedFileName != null
+                      ? Icons.file_present
+                      : Icons.folder_open,
+                  size: 18,
+                ),
+                label: Text(
+                  selectedFileName != null
+                      ? 'éćŠćäťś: ${truncateFileName(selectedFileName)}'
+                      : 'éćŠćäťś',
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: hasBank
+                      ? (selectedFileName != null
+                          ? Colors.green[600]
+                          : Colors.blue[400])
+                      : Colors.grey,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: hasBank ? addOperationAnswer : null,
+                icon: const Icon(Icons.add, size: 18),
+                label: Text('ćˇťĺ ćŁćĽéĄš ($answerCount)'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor:
+                      hasBank ? Colors.green[600] : Colors.grey[300],
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              if (editingIndex != null) ...[
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: () => self.clearOperationForm(),
+                  icon: const Icon(Icons.close, size: 18),
+                  label: const Text('ĺćś'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.grey,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildOperationFileRow(int index, bool enabled) {
+    final self = this as dynamic;
+    final controllers =
+        self.operationFileControllers as List<OperationFileController>;
+    while (controllers.length <= index) {
+      controllers.add(OperationFileController());
+    }
+    final ctrl = controllers[index];
+    final hasFile = ctrl.sourceFilePath != null;
+    final fileCount = self.operationFileCount as int;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: AppTheme.primaryBlue.withAlpha(26),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Center(
+              child: Text(
+                '${index + 1}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.primaryBlue,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            onPressed: enabled ? () => pickOperationFile(index) : null,
+            icon: Icon(
+              hasFile ? Icons.file_present : Icons.folder_open,
+              size: 16,
+            ),
+            label: Text(
+              hasFile ? 'ĺˇ˛éćŠ' : 'éćŠćäťś',
+              style: const TextStyle(fontSize: 12),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: hasFile ? Colors.green[600] : Colors.blue[400],
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: ctrl.fileNameController,
+              enabled: false,
+              decoration: InputDecoration(
+                hintText: 'ćäťśĺďźčŞĺ¨ĺĄŤĺďź',
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                filled: true,
+                fillColor: Colors.grey[100],
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                disabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: Colors.grey[300]!),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            onPressed:
+                enabled && hasFile ? () => clearOperationFile(index) : null,
+            icon: Icon(
+              Icons.clear,
+              color: hasFile ? Colors.orange : Colors.grey,
+              size: 18,
+            ),
+            tooltip: 'ć¸é¤ćäťś',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            onPressed: enabled && fileCount > 1
+                ? () => removeOperationFile(index)
+                : null,
+            icon: Icon(
+              Icons.close,
+              color:
+                  enabled && fileCount > 1 ? Colors.red : Colors.grey,
+              size: 18,
+            ),
+            tooltip: 'ĺ é¤ć­¤ćäťś',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildOperationAnswerRow(int index, bool enabled) {
+    final self = this as dynamic;
+    final answerControllers =
+        self.operationAnswerControllers as List<OperationAnswerController>;
+    while (answerControllers.length <= index) {
+      answerControllers.add(OperationAnswerController());
+    }
+    final ctrl = answerControllers[index];
+    if (ctrl.lineCheckControllers.isEmpty) {
+      ctrl.lineCheckControllers.add(OperationLineCheckController());
+    }
+    final answerCount = self.operationAnswerCount as int;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.green[50],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.green[200]!),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 36,
+            decoration: BoxDecoration(
+              color: Colors.green.withAlpha(26),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Center(
+              child: Text(
+                '${index + 1}',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green[700],
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: 70,
+            height: 36,
+            child: TextField(
+              controller: ctrl.lineCheckControllers.isNotEmpty
+                  ? ctrl.lineCheckControllers[0].lineNumberController
+                  : null,
+              enabled: enabled,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13),
+              decoration: InputDecoration(
+                hintText: 'čĄĺˇ',
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: AppTheme.borderMain),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          ElevatedButton.icon(
+            onPressed: enabled && ctrl.lineCheckControllers.isNotEmpty
+                ? () => readLineFromInitialFile(index, 0)
+                : null,
+            icon: const Icon(Icons.download, size: 14),
+            label: const Text('čŻťĺ', style: TextStyle(fontSize: 12)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue[400],
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              minimumSize: const Size(60, 36),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: SizedBox(
+              height: 36,
+              child: TextField(
+                controller: ctrl.lineCheckControllers.isNotEmpty
+                    ? ctrl.lineCheckControllers[0].expectedContentController
+                    : null,
+                enabled: enabled,
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'ććĺĺŽš',
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: AppTheme.borderMain),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 50,
+            height: 36,
+            child: TextField(
+              controller: ctrl.lineCheckControllers.isNotEmpty
+                  ? ctrl.lineCheckControllers[0].scoreController
+                  : null,
+              enabled: enabled,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13),
+              decoration: InputDecoration(
+                hintText: 'ĺ',
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          IconButton(
+            onPressed: enabled && answerCount > 1
+                ? () => removeOperationAnswer(index)
+                : null,
+            icon: Icon(
+              Icons.close,
+              color: enabled && answerCount > 1
+                  ? Colors.red
+                  : Colors.grey,
+              size: 20,
+            ),
+            tooltip: 'ĺ é¤ć­¤ćŁćĽéĄš',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildOperationQuestionTable() {
+    final self = this as dynamic;
+    final operationQuestions =
+        self.operationQuestions as List<OperationQuestion>;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.table_chart, color: AppTheme.primaryBlue),
+              const SizedBox(width: 8),
+              const Text(
+                'ćä˝é˘ĺčĄ¨',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryBlue.withAlpha(26),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  'ĺą ${operationQuestions.length} é˘',
+                  style: const TextStyle(
+                    color: AppTheme.primaryBlue,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          operationQuestions.isEmpty
+              ? buildEmptyOperationTable()
+              : buildOperationTable(),
+        ],
+      ),
+    );
+  }
+
+  Widget buildEmptyOperationTable() {
+    return Container(
+      padding: const EdgeInsets.all(32),
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Center(
+        child: Column(
+          children: [
+            Icon(
+              Icons.computer_outlined,
+              size: 48,
+              color: Colors.grey[400],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'ćć ćä˝é˘ďźçšĺťä¸ćšćéŽćˇťĺ ',
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildOperationTable() {
+    final self = this as dynamic;
+    final operationQuestions =
+        self.operationQuestions as List<OperationQuestion>;
+    final editingIndex = self.editingOperationIndex as int?;
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        showCheckboxColumn: false,
+        headingRowColor: MaterialStateProperty.all(
+          AppTheme.primaryBlue.withAlpha(26),
+        ),
+        border: TableBorder.all(
+          color: AppTheme.borderMain,
+          width: 1,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        columns: const [
+          DataColumn(
+              label: Text('é˘ĺ', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(
+              label: Text('é˘ĺˇ', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(
+              label:
+                  Text('é˘çŽćčż°', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(
+              label:
+                  Text('ĺĺ§ćäťś', style: TextStyle(fontWeight: FontWeight.bold))),DataColumn(label: Text('źě˛éĎî', style: TextStyle(fontWeight: FontWeight.bold))),DataColumn(label: Text('ˇÖÖľ', style: TextStyle(fontWeight: FontWeight.bold))),],rows: operationQuestions.asMap().entries.map((entry) {final index = entry.key;final q = entry.value;final isEditing = editingIndex == index;final previewText = q.questionText.length > 30 ? '...' : q.questionText;final fileCount = q.initialFiles.length;final answerCount = q.initialFiles.length;return DataRow(color: MaterialStateProperty.all(isEditing ? AppTheme.primaryBlue.withAlpha(26) : null),onSelectChanged: (_) => loadOperationQuestionToForm(index),cells: [DataCell(Text('˛Ů×÷Ěâ')),DataCell(Text('')),DataCell(SizedBox(width: 200,child: Text(previewText, overflow: TextOverflow.ellipsis),),),DataCell(Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),decoration: BoxDecoration(color: Colors.blue.withAlpha(26),borderRadius: BorderRadius.circular(4),),child: Text(' ¸öÎÄźţ',style: TextStyle(color: Colors.blue[700],fontWeight: FontWeight.bold,fontSize: 12,),),),),DataCell(Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),decoration: BoxDecoration(color: Colors.green.withAlpha(26),borderRadius: BorderRadius.circular(4),),child: Text(' Ďî',style: TextStyle(color: Colors.green[700],fontWeight: FontWeight.bold,fontSize: 12,),),),),DataCell(Text(' ˇÖ')),],);}).toList(),),);}}
