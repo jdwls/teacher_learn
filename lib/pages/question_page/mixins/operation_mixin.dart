@@ -1363,8 +1363,19 @@ mixin OperationQuestionMixin on State {
               ? '${q.questionText.substring(0, 30)}...'
               : q.questionText;
           final fileCount = q.initialFiles.length;
-          final answerCount = q.initialFiles.length;
-          final totalScore = q.initialFiles.fold<int>(0, (sum, f) => sum + f.score);
+          int answerCount = 0;
+          int totalScore = 0;
+          for (final f in q.initialFiles) {
+            if (f.checkLines != null && f.checkLines!.isNotEmpty) {
+              answerCount += f.checkLines!.length;
+              for (final cl in f.checkLines!) {
+                totalScore += (cl['分值'] ?? cl['score'] ?? 5) as int;
+              }
+            } else {
+              answerCount += 1;
+              totalScore += f.score;
+            }
+          }
           return DataRow(
             color: MaterialStateProperty.all(
                 isEditing ? AppTheme.primaryBlue.withAlpha(26) : null),
