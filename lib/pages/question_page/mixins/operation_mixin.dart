@@ -281,11 +281,12 @@ mixin OperationQuestionMixin on State {
         if (ctrl.fileNameController.text == selectedFileName) {
           fileContent = ctrl.contentController.text;
           final editingIndex = self.editingOperationIndex as int?;
+          final selectedBank = self.selectedBank as String?;
           final questionId = editingIndex != null
               ? '题目${editingIndex + 1}'
               : '题目${(self.operationQuestions as List).length + 1}';
           matchedFilePath =
-              '操作题/$questionId/${ctrl.fileNameController.text}';
+              '题库/$selectedBank/操作题/$questionId/${ctrl.fileNameController.text}';
           break;
         }
       }
@@ -427,7 +428,7 @@ mixin OperationQuestionMixin on State {
       return;
     }
 
-    // 构建初始文件（每个检查项对应一个 OperationFile）
+    // 构建初始文件：按文件路径分组，同文件的多行检查合并到检查行列表
     final initialFiles = <OperationFile>[];
     final controllers =
         self.operationFileControllers as List<OperationFileController>;
@@ -445,33 +446,50 @@ mixin OperationQuestionMixin on State {
       }
     }
 
-    // 从 answerControllers 中提取检查项信息
+    // 按文件路径分组：key=文件路径, value=检查行列表
+    final fileCheckLines = <String, List<Map<String, dynamic>>>{};
+    final filePaths = <String, String>{}; // 文件路径 -> 文件名
+
     for (int i = 0; i < answerCount; i++) {
       if (i < answerControllers.length) {
         final ctrl = answerControllers[i];
-        final targetFile = ctrl.targetPathController.text.trim();
-        if (targetFile.isEmpty) continue;
-
-        // 每个 answerController 可能有多个 lineCheckControllers（同一文件的多行检查）
+        // 从 lineCheckControllers 中获取文件路径和检查行信息
         for (int j = 0; j < ctrl.lineCheckControllers.length; j++) {
           final lineCtrl = ctrl.lineCheckControllers[j];
+          final filePath = lineCtrl.filePathController.text.trim();
           final lineNumber = int.tryParse(lineCtrl.lineNumberController.text);
           final expectedContent = lineCtrl.expectedContentController.text.trim();
           final lineScore = int.tryParse(lineCtrl.scoreController.text) ?? 5;
 
-          if (lineNumber != null && lineNumber > 0 && expectedContent.isNotEmpty) {
-            final fileName = targetFile.split('/').last;
-            initialFiles.add(OperationFile(
-              fileName: fileName,
-              filePath: targetFile,
-              lineNumber: lineNumber,
-              expectedContent: expectedContent,
-              score: lineScore,
-              content: fileContentByFileName[fileName] ?? '',
-            ));
+          if (filePath.isEmpty || lineNumber == null || lineNumber < 1) continue;
+
+          if (!fileCheckLines.containsKey(filePath)) {
+            fileCheckLines[filePath] = [];
+            filePaths[filePath] = filePath.split('/').last;
           }
+          fileCheckLines[filePath]!.add({
+            '行号': lineNumber,
+            '内容': expectedContent,
+            '分值': lineScore,
+          });
         }
       }
+    }
+
+    // 从 filePaths 构建 OperationFile 对象
+    for (final entry in fileCheckLines.entries) {
+      final filePath = entry.key;
+      final checkLines = entry.value;
+      final fileName = filePaths[filePath]!;
+      final totalFileScore = checkLines.fold<int>(0, (sum, cl) => sum + (cl['分值'] as int));
+
+      initialFiles.add(OperationFile(
+        fileName: fileName,
+        filePath: filePath,
+        checkLines: checkLines,
+        score: totalFileScore,
+        content: fileContentByFileName[fileName] ?? '',
+      ));
     }
 
     if (initialFiles.isEmpty) {
@@ -484,7 +502,7 @@ mixin OperationQuestionMixin on State {
       return;
     }
 
-    // 计算总分（每个检查项都有自己的分值）
+    // 计算总分（所有检查项分值之和）
     final totalScore = initialFiles.fold<int>(0, (sum, f) => sum + f.score);
 
     final operationQuestion = OperationQuestion(
@@ -500,6 +518,32 @@ mixin OperationQuestionMixin on State {
         operationQuestions.add(operationQuestion);
       }
     });
+
+    // 复制文件到题库目录
+    final questionId = editingIndex != null
+        ? '题目${editingIndex + 1}'
+        : '题目${operationQuestions.length}';
+    for (final file in initialFiles) {
+      if (file.fileName.isNotEmpty) {
+        try {
+          final fileName = file.fileName;
+          final targetDir = Directory('${Directory.current.path}/题库/$selectedBank/操作题/$questionId');
+          if (!targetDir.existsSync()) {
+            targetDir.createSync(recursive: true);
+          }
+          final targetFile = File('${targetDir.path}/$fileName');
+          // 从 fileControllers 中查找对应的源文件内容
+          final sourceContent = fileContentByFileName[fileName];
+          if (sourceContent != null && sourceContent.isNotEmpty) {
+            targetFile.writeAsStringSync(sourceContent);
+          }
+          // 更新 filePath 为实际文件系统路径
+          file.filePath = '题库/$selectedBank/操作题/$questionId/$fileName';
+        } catch (e) {
+          // 文件复制失败不影响主流程
+        }
+      }
+    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -636,7 +680,7 @@ mixin OperationQuestionMixin on State {
         for (final cl in item.checkLines!) {
           final lineNum = cl['行号'] ?? cl['lineNumber'] ?? 1;
           final content = cl['内容'] ?? cl['content'] ?? '';
-          final lineScore = cl['分值'] ?? cl['score'] ?? item.score;
+          final lineScore = cl['分值'] ?? cl['score'] ?? 5;
 
           final answerCtrl = answerControllers[answerIdx];
           answerCtrl.targetPathController.text = filePath;
@@ -655,6 +699,7 @@ mixin OperationQuestionMixin on State {
           answerIdx++;
         }
       } else {
+        // 兼容旧格式：没有 checkLines，使用单行号/内容
         final answerCtrl = answerControllers[answerIdx];
         answerCtrl.targetPathController.text = filePath;
         answerCtrl.keywordsController.text = '';

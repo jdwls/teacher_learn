@@ -34,7 +34,7 @@ migrate_working_dir/
 /coverage/
 /information/
 /题库/
-
+/md/
 # Symbolication related
 app.*.symbols
 
