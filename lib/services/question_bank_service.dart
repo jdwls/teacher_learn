@@ -1,8 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
+import '../utils/app_path.dart';
 
 class QuestionBankService {
-  static final String _rootDir = Directory.current.path;
+  static String get _rootDir => AppPath.projectRoot;
 
   /// 获取所有题库列表
   static Future<List<String>> getQuestionBanks() async {
@@ -201,12 +202,17 @@ class QuestionBankService {
             });
           }
 
-          // 保存为嵌套格式（不保存题目分值，只保存 items 中的分值）
+          // 保存题目总分，学生端优先使用该字段评分。
+          final questionScore = mq['score'] is num
+              ? (mq['score'] as num).toInt()
+              : int.tryParse(mq['score']?.toString() ?? '') ??
+                  itemsList.fold<int>(0, (sum, item) => sum + (item['分值'] as int));
           matchingQuestionsData.add({
             '题型': '连线题',
             '题号': '${qIndex + 1}',
             '题干': mq['题干'] ?? mq['questionText'] ?? '',
             '题干图片': mq['题干图片'] ?? mq['questionImage'] ?? '',
+            'score': questionScore,
             'items': itemsList,
           });
         }
@@ -240,12 +246,16 @@ class QuestionBankService {
             });
           }
 
-          // 保存为嵌套格式（不保存题目分值，只保存 items 中的分值）
+          final questionScore = sq['score'] is num
+              ? (sq['score'] as num).toInt()
+              : int.tryParse(sq['score']?.toString() ?? '') ??
+                  itemsList.fold<int>(0, (sum, item) => sum + (item['分值'] as int));
           sequentialQuestionsData.add({
             '题型': '顺序题',
             '题号': '${qIndex + 1}',
             '题干': sq['题干'] ?? sq['questionText'] ?? '',
             '题干图片': sq['题干图片'] ?? sq['questionImage'] ?? '',
+            'score': questionScore,
             'items': itemsList,
           });
         }
@@ -292,32 +302,27 @@ class QuestionBankService {
           final initialFilesList = (oq['初始文件'] as List<dynamic>?)
                   ?.map((f) {
                     final fileData = <String, dynamic>{
-                      '文件名': f['文件名'] ?? f['fileName'] ?? '',
-                      '文件路径': f['文件路径'] ?? f['filePath'] ?? '',
+                      '文件名': f['文件名']?.toString() ?? '',
+                      '文件路径': f['文件路径']?.toString() ?? '',
                     };
-                    // 保留行号（兼容中英文）
-                    final lineNum = f['行号'] ?? f['lineNumber'];
-                    if (lineNum != null) {
-                      fileData['行号'] = lineNum;
+                    // 保留行号
+                    if (f['行号'] != null) {
+                      fileData['行号'] = f['行号'];
                     }
                     // 保留期望内容
-                    final expectedContent =
-                        f['期望内容'] ?? f['expectedContent'] ?? '';
-                    if (expectedContent.toString().isNotEmpty) {
-                      fileData['期望内容'] = expectedContent;
+                    if (f['期望内容']?.toString().isNotEmpty == true) {
+                      fileData['期望内容'] = f['期望内容'].toString();
                     }
-                    // 保留分值（兼容中英文）
-                    final score = f['分值'] ?? f['score'];
-                    if (score != null) {
-                      fileData['分值'] = score;
+                    // 保留分值
+                    if (f['分值'] != null) {
+                      fileData['分值'] = f['分值'];
                     }
                     // 检查行和内容都保存
                     if (f['检查行'] != null) {
                       fileData['检查行'] = f['检查行'];
                     }
-                    if ((f['内容'] ?? f['content'])?.toString().isNotEmpty ==
-                        true) {
-                      fileData['内容'] = f['内容'] ?? f['content'] ?? '';
+                    if (f['内容']?.toString().isNotEmpty == true) {
+                      fileData['内容'] = f['内容'].toString();
                     }
                     return fileData;
                   })
@@ -351,7 +356,23 @@ class QuestionBankService {
       };
 
       final jsonString = const JsonEncoder.withIndent('  ').convert(bankData);
-      await jsonFile.writeAsString(jsonString, flush: true);
+
+      // 安全写入：临时文件 → flush → JSON 校验 → 原子 rename
+      final tempFile = File('${jsonFile.path}.tmp');
+      try {
+        await tempFile.writeAsString(jsonString, flush: true);
+        json.decode(await tempFile.readAsString());
+        if (await jsonFile.exists()) {
+          await jsonFile.delete();
+        }
+        await tempFile.rename(jsonFile.path);
+      } catch (e) {
+        print('保存题库JSON失败: $e');
+        try {
+          if (await tempFile.exists()) await tempFile.delete();
+        } catch (_) {}
+        return false;
+      }
 
       return true;
     } catch (e) {
@@ -641,33 +662,28 @@ class QuestionBankService {
         final initialFiles = (oq['初始文件'] as List<dynamic>?)
                 ?.map((f) {
                   final file = <String, dynamic>{
-                    '文件名': f['文件名'] ?? f['fileName'] ?? '',
-                    '文件路径': f['文件路径'] ?? f['filePath'] ?? '',
+                    '文件名': f['文件名']?.toString() ?? '',
+                    '文件路径': f['文件路径']?.toString() ?? '',
                   };
-                  // 读取行号（兼容中英文）
-                  final lineNum = f['行号'] ?? f['lineNumber'];
-                  if (lineNum != null) {
-                    file['行号'] = lineNum;
+                  // 读取行号
+                  if (f['行号'] != null) {
+                    file['行号'] = f['行号'];
                   }
                   // 读取期望内容
-                  final expectedContent =
-                      f['期望内容'] ?? f['expectedContent'] ?? '';
-                  if (expectedContent.toString().isNotEmpty) {
-                    file['期望内容'] = expectedContent;
+                  if (f['期望内容']?.toString().isNotEmpty == true) {
+                    file['期望内容'] = f['期望内容'].toString();
                   }
-                  // 读取分值（兼容中英文）
-                  final score = f['分值'] ?? f['score'];
-                  if (score != null) {
-                    file['分值'] = score;
+                  // 读取分值
+                  if (f['分值'] != null) {
+                    file['分值'] = f['分值'];
                   }
                   // 检查行（原样保留，OperationFile.fromMap 能解析）
                   if (f['检查行'] is List) {
                     file['检查行'] = f['检查行'];
                   }
                   // 内容
-                  if ((f['内容'] ?? f['content'])?.toString().isNotEmpty ==
-                      true) {
-                    file['内容'] = f['内容'] ?? f['content'] ?? '';
+                  if (f['内容']?.toString().isNotEmpty == true) {
+                    file['内容'] = f['内容'].toString();
                   }
                   return file;
                 })
@@ -681,9 +697,11 @@ class QuestionBankService {
             for (final cl in checkLines) {
               final clMap = cl as Map<String, dynamic>;
               answers.add({
-                'targetPath': file['文件路径'] ?? '',
-                'lineNumber': clMap['行号'] ?? clMap['lineNumber'] ?? 1,
-                'expectedContent': clMap['内容'] ?? clMap['content'] ?? '',
+                'targetPath': file['文件路径']?.toString() ?? '',
+                'lineNumber': clMap['行号'] is int
+                    ? clMap['行号'] as int
+                    : int.tryParse(clMap['行号']?.toString() ?? '1') ?? 1,
+                'expectedContent': clMap['期望内容']?.toString() ?? '',
                 'score': 5,
               });
             }

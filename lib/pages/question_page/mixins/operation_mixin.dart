@@ -1,7 +1,9 @@
 import 'dart:io';
+import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
 import '../../../theme/app_theme.dart';
 import '../../../services/file_picker_service.dart';
+import '../../../utils/app_path.dart';
 import '../../../models/question_models.dart';
 import '../controllers.dart';
 
@@ -22,8 +24,9 @@ mixin OperationQuestionMixin on State {
 
   // ========== Stub Methods ==========
 
-  void saveQuestionsToFile() {
+  Future<bool> saveQuestionsToFile() async {
     // This will be implemented in the host state class
+    return true;
   }
 
   // ========== File Helper Methods ==========
@@ -37,8 +40,7 @@ mixin OperationQuestionMixin on State {
   }
 
   /// 生成挖空后的初始文件内容
-  String generateHollowedContent(
-      String originalContent, List<int> linesToHollow) {
+  String generateHollowedContent(String originalContent, List<int> linesToHollow) {
     final lines = originalContent.split('\n');
     final sortedLines = linesToHollow.toList()..sort((a, b) => b.compareTo(a));
     for (final lineNum in sortedLines) {
@@ -53,8 +55,7 @@ mixin OperationQuestionMixin on State {
   /// 获取可用的初始文件名列表
   List<String> getAvailableFileNames() {
     final self = this as dynamic;
-    final controllers =
-        self.operationFileControllers as List<OperationFileController>;
+    final controllers = self.operationFileControllers as List<OperationFileController>;
     final fileCount = self.operationFileCount as int;
 
     final fileNames = <String>[];
@@ -77,8 +78,7 @@ mixin OperationQuestionMixin on State {
       if (result == null) return;
 
       final self = this as dynamic;
-      final controllers =
-          self.operationFileControllers as List<OperationFileController>;
+      final controllers = self.operationFileControllers as List<OperationFileController>;
 
       while (controllers.length <= index) {
         controllers.add(OperationFileController());
@@ -115,8 +115,7 @@ mixin OperationQuestionMixin on State {
 
   void clearOperationFile(int index) {
     final self = this as dynamic;
-    final controllers =
-        self.operationFileControllers as List<OperationFileController>;
+    final controllers = self.operationFileControllers as List<OperationFileController>;
     if (index < controllers.length) {
       final ctrl = controllers[index];
       setState(() {
@@ -133,8 +132,7 @@ mixin OperationQuestionMixin on State {
       if (result == null) return;
 
       final self = this as dynamic;
-      final controllers =
-          self.operationFileControllers as List<OperationFileController>;
+      final controllers = self.operationFileControllers as List<OperationFileController>;
 
       while (controllers.length < 1) {
         controllers.add(OperationFileController());
@@ -177,14 +175,23 @@ mixin OperationQuestionMixin on State {
       if (result == null) return;
 
       final self = this as dynamic;
-      final controllers =
-          self.operationFileControllers as List<OperationFileController>;
+      final controllers = self.operationFileControllers as List<OperationFileController>;
       final fileCount = self.operationFileCount as int;
 
       while (controllers.length <= fileCount) {
         controllers.add(OperationFileController());
       }
 
+      if (answerIndex < 0 ||
+          answerIndex >=
+              (self.operationAnswerControllers as List<OperationAnswerController>).length) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('答案索引超出范围')),
+          );
+        }
+        return;
+      }
       final newIndex = fileCount;
       controllers[newIndex].sourceFilePath = result.filePath;
       controllers[newIndex].fileNameController.text = result.fileName;
@@ -194,8 +201,7 @@ mixin OperationQuestionMixin on State {
         self.operationFileCount = newIndex + 1;
         final answerControllers =
             self.operationAnswerControllers as List<OperationAnswerController>;
-        answerControllers[answerIndex].targetPathController.text =
-            result.fileName;
+        answerControllers[answerIndex].targetPathController.text = result.fileName;
       });
 
       if (mounted) {
@@ -221,8 +227,7 @@ mixin OperationQuestionMixin on State {
 
   void readLineFromInitialFile(int answerIndex, int lineCheckIndex) {
     final self = this as dynamic;
-    final answerControllers =
-        self.operationAnswerControllers as List<OperationAnswerController>;
+    final answerControllers = self.operationAnswerControllers as List<OperationAnswerController>;
 
     // 越界检查
     if (answerIndex >= answerControllers.length) {
@@ -271,8 +276,7 @@ mixin OperationQuestionMixin on State {
 
     String? fileContent;
     String? matchedFilePath;
-    final controllers =
-        self.operationFileControllers as List<OperationFileController>;
+    final controllers = self.operationFileControllers as List<OperationFileController>;
     final fileCount = self.operationFileCount as int;
 
     for (int i = 0; i < fileCount; i++) {
@@ -285,8 +289,7 @@ mixin OperationQuestionMixin on State {
           final questionId = editingIndex != null
               ? '题目${editingIndex + 1}'
               : '题目${(self.operationQuestions as List).length + 1}';
-          matchedFilePath =
-              '题库/$selectedBank/操作题/$questionId/${ctrl.fileNameController.text}';
+          matchedFilePath = '题库/$selectedBank/操作题/$questionId/${ctrl.fileNameController.text}';
           break;
         }
       }
@@ -295,8 +298,7 @@ mixin OperationQuestionMixin on State {
     if (fileContent == null || fileContent.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-              '未找到文件内容: ${truncateFileName(selectedFileName)}'),
+          content: Text('未找到文件内容: ${truncateFileName(selectedFileName)}'),
           backgroundColor: Colors.red,
         ),
       );
@@ -333,8 +335,7 @@ mixin OperationQuestionMixin on State {
 
   void addOperationFile() {
     final self = this as dynamic;
-    final controllers =
-        self.operationFileControllers as List<OperationFileController>;
+    final controllers = self.operationFileControllers as List<OperationFileController>;
     setState(() {
       self.operationFileCount++;
       final newIndex = (self.operationFileCount as int) - 1;
@@ -350,8 +351,7 @@ mixin OperationQuestionMixin on State {
     if (fileCount > 1) {
       setState(() {
         self.operationFileCount--;
-        final controllers =
-            self.operationFileControllers as List<OperationFileController>;
+        final controllers = self.operationFileControllers as List<OperationFileController>;
         if (index < controllers.length) {
           controllers[index].dispose();
           controllers.removeAt(index);
@@ -365,15 +365,12 @@ mixin OperationQuestionMixin on State {
     setState(() {
       self.operationAnswerCount++;
       final index = (self.operationAnswerCount as int) - 1;
-      final answerControllers =
-          self.operationAnswerControllers as List<OperationAnswerController>;
+      final answerControllers = self.operationAnswerControllers as List<OperationAnswerController>;
       while (answerControllers.length <= index) {
         answerControllers.add(OperationAnswerController());
       }
       if (answerControllers[index].lineCheckControllers.isEmpty) {
-        answerControllers[index]
-            .lineCheckControllers
-            .add(OperationLineCheckController());
+        answerControllers[index].lineCheckControllers.add(OperationLineCheckController());
       }
     });
   }
@@ -398,15 +395,12 @@ mixin OperationQuestionMixin on State {
 
   Future<void> saveOperationQuestion() async {
     final self = this as dynamic;
-    final questionController =
-        self.operationQuestionController as TextEditingController;
+    final questionController = self.operationQuestionController as TextEditingController;
     final selectedBank = self.selectedBank as String?;
     final editingIndex = self.editingOperationIndex as int?;
-    final operationQuestions =
-        self.operationQuestions as List<OperationQuestion>;
+    final operationQuestions = self.operationQuestions as List<OperationQuestion>;
     final answerCount = self.operationAnswerCount as int;
-    final answerControllers =
-        self.operationAnswerControllers as List<OperationAnswerController>;
+    final answerControllers = self.operationAnswerControllers as List<OperationAnswerController>;
 
     if (questionController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -430,16 +424,13 @@ mixin OperationQuestionMixin on State {
 
     // 构建初始文件：按文件路径分组，同文件的多行检查合并到检查行列表
     final initialFiles = <OperationFile>[];
-    final controllers =
-        self.operationFileControllers as List<OperationFileController>;
+    final controllers = self.operationFileControllers as List<OperationFileController>;
 
     // 先从 fileControllers 获取完整文件内容（按文件名索引）
     final fileContentByFileName = <String, String>{};
     final fileCount = self.operationFileCount as int;
     for (int i = 0; i < fileCount; i++) {
-      final fileName = i < controllers.length
-          ? controllers[i].fileNameController.text.trim()
-          : '';
+      final fileName = i < controllers.length ? controllers[i].fileNameController.text.trim() : '';
       if (fileName.isNotEmpty) {
         fileContentByFileName[fileName] =
             i < controllers.length ? controllers[i].contentController.text : '';
@@ -511,6 +502,57 @@ mixin OperationQuestionMixin on State {
       initialFiles: initialFiles,
     );
 
+    // P1：先验证所有文件能否成功写入
+    final questionId =
+        editingIndex != null ? '题目${editingIndex + 1}' : '题目${operationQuestions.length}';
+    final safeBank = selectedBank.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+    final safeQuestionId = questionId.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+
+    // 验证文件写入（逐文件 tmp + rename 原子写入，避免半截文件）
+    bool fileSaveSuccess = true;
+    for (final file in initialFiles) {
+      if (file.fileName.isNotEmpty) {
+        try {
+          final safeFileName = p.basename(file.fileName);
+          final targetDir =
+              Directory(p.join(AppPath.projectRoot, '题库', safeBank, '操作题', safeQuestionId));
+          if (!targetDir.existsSync()) {
+            targetDir.createSync(recursive: true);
+          }
+          final targetFile = File(p.join(targetDir.path, safeFileName));
+          final sourceContent = fileContentByFileName[file.fileName];
+          if (sourceContent != null && sourceContent.isNotEmpty) {
+            // 原子写入：先写临时文件，成功后再替换正式文件
+            final tempFile = File('${targetFile.path}.tmp');
+            tempFile.writeAsStringSync(sourceContent, flush: true);
+            if (targetFile.existsSync()) {
+              targetFile.deleteSync();
+            }
+            tempFile.renameSync(targetFile.path);
+          }
+          // 更新 filePath 为实际文件系统路径
+          file.filePath = '题库/$selectedBank/操作题/$questionId/${file.fileName}';
+        } catch (e) {
+          print('操作题文件保存失败: ${file.fileName}: $e');
+          fileSaveSuccess = false;
+          break;
+        }
+      }
+    }
+
+    if (!fileSaveSuccess) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('操作题文件保存失败，请重试'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    // P2：文件成功写入后，更新内存列表
     setState(() {
       if (editingIndex != null) {
         operationQuestions[editingIndex] = operationQuestion;
@@ -518,32 +560,6 @@ mixin OperationQuestionMixin on State {
         operationQuestions.add(operationQuestion);
       }
     });
-
-    // 复制文件到题库目录
-    final questionId = editingIndex != null
-        ? '题目${editingIndex + 1}'
-        : '题目${operationQuestions.length}';
-    for (final file in initialFiles) {
-      if (file.fileName.isNotEmpty) {
-        try {
-          final fileName = file.fileName;
-          final targetDir = Directory('${Directory.current.path}/题库/$selectedBank/操作题/$questionId');
-          if (!targetDir.existsSync()) {
-            targetDir.createSync(recursive: true);
-          }
-          final targetFile = File('${targetDir.path}/$fileName');
-          // 从 fileControllers 中查找对应的源文件内容
-          final sourceContent = fileContentByFileName[fileName];
-          if (sourceContent != null && sourceContent.isNotEmpty) {
-            targetFile.writeAsStringSync(sourceContent);
-          }
-          // 更新 filePath 为实际文件系统路径
-          file.filePath = '题库/$selectedBank/操作题/$questionId/$fileName';
-        } catch (e) {
-          // 文件复制失败不影响主流程
-        }
-      }
-    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -556,8 +572,15 @@ mixin OperationQuestionMixin on State {
       );
     }
 
-    if (selectedBank != null) {
-      saveQuestionsToFile();
+    final saveSuccess = await saveQuestionsToFile();
+    if (!saveSuccess && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('题目已添加，但保存配置失败，请检查存储空间'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
 
     clearOperationForm();
@@ -565,14 +588,10 @@ mixin OperationQuestionMixin on State {
 
   void locClearOperationForm() {
     final self = this as dynamic;
-    final questionController =
-        self.operationQuestionController as TextEditingController;
-    final scoreController =
-        self.operationScoreController as TextEditingController;
-    final controllers =
-        self.operationFileControllers as List<OperationFileController>;
-    final answerControllers =
-        self.operationAnswerControllers as List<OperationAnswerController>;
+    final questionController = self.operationQuestionController as TextEditingController;
+    final scoreController = self.operationScoreController as TextEditingController;
+    final controllers = self.operationFileControllers as List<OperationFileController>;
+    final answerControllers = self.operationAnswerControllers as List<OperationAnswerController>;
 
     questionController.clear();
     scoreController.text = '10';
@@ -604,10 +623,8 @@ mixin OperationQuestionMixin on State {
       answerControllers.add(OperationAnswerController());
     }
     // 确保至少有一个 lineCheckController
-    if (answerControllers.isNotEmpty &&
-        answerControllers[0].lineCheckControllers.isEmpty) {
-      answerControllers[0].lineCheckControllers.add(
-          OperationLineCheckController());
+    if (answerControllers.isNotEmpty && answerControllers[0].lineCheckControllers.isEmpty) {
+      answerControllers[0].lineCheckControllers.add(OperationLineCheckController());
     }
   }
 
@@ -618,16 +635,11 @@ mixin OperationQuestionMixin on State {
 
   void loadOperationQuestionToForm(int index) {
     final self = this as dynamic;
-    final operationQuestions =
-        self.operationQuestions as List<OperationQuestion>;
-    final questionController =
-        self.operationQuestionController as TextEditingController;
-    final scoreController =
-        self.operationScoreController as TextEditingController;
-    final controllers =
-        self.operationFileControllers as List<OperationFileController>;
-    final answerControllers =
-        self.operationAnswerControllers as List<OperationAnswerController>;
+    final operationQuestions = self.operationQuestions as List<OperationQuestion>;
+    final questionController = self.operationQuestionController as TextEditingController;
+    final scoreController = self.operationScoreController as TextEditingController;
+    final controllers = self.operationFileControllers as List<OperationFileController>;
+    final answerControllers = self.operationAnswerControllers as List<OperationAnswerController>;
 
     final q = operationQuestions[index];
 
@@ -725,12 +737,14 @@ mixin OperationQuestionMixin on State {
       ),
     );
   }
+
+  /// 删除操作题及其所有关联文件
+  /// 确保目录删除成功后再更新数据结构
   Future<void> deleteOperationQuestion() async {
     final self = this as dynamic;
     final editingIndex = self.editingOperationIndex as int?;
     final selectedBank = self.selectedBank as String?;
-    final operationQuestions =
-        self.operationQuestions as List<OperationQuestion>;
+    final operationQuestions = self.operationQuestions as List<OperationQuestion>;
 
     if (editingIndex == null) return;
 
@@ -759,26 +773,60 @@ mixin OperationQuestionMixin on State {
     final deletedIndex = editingIndex;
     final questionId = '题目${deletedIndex + 1}';
 
+    // 1. 首先尝试删除磁盘文件
+    bool fileDeleteSuccess = true;
+    String? deleteErrorMsg;
+
     if (selectedBank != null) {
       try {
-        final targetDir =
-            '${Directory.current.path}/题库/$selectedBank/操作题/$questionId';
+        final targetDir = '${Directory.current.path}/题库/$selectedBank/操作题/$questionId';
         final dir = Directory(targetDir);
         if (await dir.exists()) {
           await dir.delete(recursive: true);
+          debugPrint('已删除操作题目录: $targetDir');
         }
       } catch (e) {
-        // ignore
+        fileDeleteSuccess = false;
+        deleteErrorMsg = '删除操作题文件失败: $e';
+        debugPrint(deleteErrorMsg);
       }
     }
 
+    // 2. 如果文件删除失败，显示错误并返回
+    if (!fileDeleteSuccess) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(deleteErrorMsg ?? '删除操作题文件失败'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    // 3. 文件删除成功，更新数据结构
     operationQuestions.removeAt(deletedIndex);
     clearOperationForm();
 
+    // 4. 保存 JSON（已更新后的题目列表）
     if (selectedBank != null) {
-      saveQuestionsToFile();
+      final saveSuccess = await saveQuestionsToFile();
+      if (!saveSuccess) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('删除操作题文件成功，但保存配置失败，请重试'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
     }
 
+    // 5. 全部成功
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('已删除第 ${deletedIndex + 1} 题'),
@@ -792,8 +840,7 @@ mixin OperationQuestionMixin on State {
   Widget buildOperationQuestionForm() {
     final self = this as dynamic;
     final hasBank = (self.selectedBank as String?) != null;
-    final questionController =
-        self.operationQuestionController as TextEditingController;
+    final questionController = self.operationQuestionController as TextEditingController;
     final editingIndex = self.editingOperationIndex as int?;
     final answerCount = self.operationAnswerCount as int;
     final selectedFileName = self.selectedOperationFileName as String?;
@@ -803,6 +850,7 @@ mixin OperationQuestionMixin on State {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -826,8 +874,7 @@ mixin OperationQuestionMixin on State {
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide:
-                    const BorderSide(color: AppTheme.primaryBlue, width: 2),
+                borderSide: const BorderSide(color: AppTheme.primaryBlue, width: 2),
               ),
               disabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -867,11 +914,9 @@ mixin OperationQuestionMixin on State {
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('添加操作题'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor:
-                        hasBank ? AppTheme.primaryBlue : Colors.grey,
+                    backgroundColor: hasBank ? AppTheme.primaryBlue : Colors.grey,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -885,8 +930,7 @@ mixin OperationQuestionMixin on State {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: hasBank ? Colors.orange : Colors.grey,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -899,12 +943,9 @@ mixin OperationQuestionMixin on State {
                   icon: const Icon(Icons.delete_outline, size: 18),
                   label: const Text('删除题目'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: hasBank
-                        ? Colors.red[400]
-                        : Colors.grey[300],
+                    backgroundColor: hasBank ? Colors.red[400] : Colors.grey[300],
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -914,25 +955,18 @@ mixin OperationQuestionMixin on State {
               ElevatedButton.icon(
                 onPressed: hasBank ? pickBottomOperationFile : null,
                 icon: Icon(
-                  selectedFileName != null
-                      ? Icons.file_present
-                      : Icons.folder_open,
+                  selectedFileName != null ? Icons.file_present : Icons.folder_open,
                   size: 18,
                 ),
                 label: Text(
-                  selectedFileName != null
-                      ? '选择文件: ${truncateFileName(selectedFileName)}'
-                      : '选择文件',
+                  selectedFileName != null ? '选择文件: ${truncateFileName(selectedFileName)}' : '选择文件',
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: hasBank
-                      ? (selectedFileName != null
-                          ? Colors.green[600]
-                          : Colors.blue[400])
+                      ? (selectedFileName != null ? Colors.green[600] : Colors.blue[400])
                       : Colors.grey,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -944,11 +978,9 @@ mixin OperationQuestionMixin on State {
                 icon: const Icon(Icons.add, size: 18),
                 label: Text('添加检查项 ($answerCount)'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                      hasBank ? Colors.green[600] : Colors.grey[300],
+                  backgroundColor: hasBank ? Colors.green[600] : Colors.grey[300],
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -963,8 +995,7 @@ mixin OperationQuestionMixin on State {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.grey,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -980,10 +1011,9 @@ mixin OperationQuestionMixin on State {
 
   Widget buildOperationFileRow(int index, bool enabled) {
     final self = this as dynamic;
-    final controllers =
-        self.operationFileControllers as List<OperationFileController>;
-    while (controllers.length <= index) {
-      controllers.add(OperationFileController());
+    final controllers = self.operationFileControllers as List<OperationFileController>;
+    if (index < 0 || index >= controllers.length) {
+      return const SizedBox.shrink();
     }
     final ctrl = controllers[index];
     final hasFile = ctrl.sourceFilePath != null;
@@ -1038,8 +1068,7 @@ mixin OperationQuestionMixin on State {
               enabled: false,
               decoration: InputDecoration(
                 hintText: '文件名（自动填充）',
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 filled: true,
                 fillColor: Colors.grey[100],
                 border: OutlineInputBorder(
@@ -1054,8 +1083,7 @@ mixin OperationQuestionMixin on State {
           ),
           const SizedBox(width: 4),
           IconButton(
-            onPressed:
-                enabled && hasFile ? () => clearOperationFile(index) : null,
+            onPressed: enabled && hasFile ? () => clearOperationFile(index) : null,
             icon: Icon(
               Icons.clear,
               color: hasFile ? Colors.orange : Colors.grey,
@@ -1067,13 +1095,10 @@ mixin OperationQuestionMixin on State {
           ),
           const SizedBox(width: 4),
           IconButton(
-            onPressed: enabled && fileCount > 1
-                ? () => removeOperationFile(index)
-                : null,
+            onPressed: enabled && fileCount > 1 ? () => removeOperationFile(index) : null,
             icon: Icon(
               Icons.close,
-              color:
-                  enabled && fileCount > 1 ? Colors.red : Colors.grey,
+              color: enabled && fileCount > 1 ? Colors.red : Colors.grey,
               size: 18,
             ),
             tooltip: '删除此文件',
@@ -1087,14 +1112,14 @@ mixin OperationQuestionMixin on State {
 
   Widget buildOperationAnswerRow(int index, bool enabled) {
     final self = this as dynamic;
-    final answerControllers =
-        self.operationAnswerControllers as List<OperationAnswerController>;
-    while (answerControllers.length <= index) {
-      answerControllers.add(OperationAnswerController());
+    final answerControllers = self.operationAnswerControllers as List<OperationAnswerController>;
+    if (index < 0 || index >= answerControllers.length) {
+      return const SizedBox.shrink();
     }
     final ctrl = answerControllers[index];
     if (ctrl.lineCheckControllers.isEmpty) {
-      ctrl.lineCheckControllers.add(OperationLineCheckController());
+      // 控制器在事件/初始化阶段创建，build 阶段不修改状态
+      return const SizedBox.shrink();
     }
     final answerCount = self.operationAnswerCount as int;
 
@@ -1129,8 +1154,7 @@ mixin OperationQuestionMixin on State {
           const SizedBox(width: 10),
           SizedBox(
             width: 70,
-            height: 36
-,
+            height: 36,
             child: TextField(
               controller: ctrl.lineCheckControllers.first.lineNumberController,
               enabled: enabled,
@@ -1139,8 +1163,7 @@ mixin OperationQuestionMixin on State {
               style: const TextStyle(fontSize: 13),
               decoration: InputDecoration(
                 hintText: '行号',
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                 filled: true,
                 fillColor: Colors.white,
                 border: OutlineInputBorder(
@@ -1180,8 +1203,7 @@ mixin OperationQuestionMixin on State {
                 style: const TextStyle(fontSize: 13),
                 decoration: InputDecoration(
                   hintText: '期望内容',
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   filled: true,
                   fillColor: Colors.white,
                   border: OutlineInputBorder(
@@ -1207,8 +1229,7 @@ mixin OperationQuestionMixin on State {
               style: const TextStyle(fontSize: 13),
               decoration: InputDecoration(
                 hintText: '分',
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                 filled: true,
                 fillColor: Colors.white,
                 border: OutlineInputBorder(
@@ -1219,14 +1240,10 @@ mixin OperationQuestionMixin on State {
           ),
           const SizedBox(width: 6),
           IconButton(
-            onPressed: enabled && answerCount > 1
-                ? () => removeOperationAnswer(index)
-                : null,
+            onPressed: enabled && answerCount > 1 ? () => removeOperationAnswer(index) : null,
             icon: Icon(
               Icons.close,
-              color: enabled && answerCount > 1
-                  ? Colors.red
-                  : Colors.grey,
+              color: enabled && answerCount > 1 ? Colors.red : Colors.grey,
               size: 20,
             ),
             tooltip: '删除此检查项',
@@ -1240,14 +1257,14 @@ mixin OperationQuestionMixin on State {
 
   Widget buildOperationQuestionTable() {
     final self = this as dynamic;
-    final operationQuestions =
-        self.operationQuestions as List<OperationQuestion>;
+    final operationQuestions = self.operationQuestions as List<OperationQuestion>;
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1266,8 +1283,7 @@ mixin OperationQuestionMixin on State {
               ),
               const Spacer(),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: AppTheme.primaryBlue.withAlpha(26),
                   borderRadius: BorderRadius.circular(16),
@@ -1284,9 +1300,7 @@ mixin OperationQuestionMixin on State {
             ],
           ),
           const SizedBox(height: 16),
-          operationQuestions.isEmpty
-              ? buildEmptyOperationTable()
-              : buildOperationTable(),
+          operationQuestions.isEmpty ? buildEmptyOperationTable() : buildOperationTable(),
         ],
       ),
     );
@@ -1323,8 +1337,7 @@ mixin OperationQuestionMixin on State {
 
   Widget buildOperationTable() {
     final self = this as dynamic;
-    final operationQuestions =
-        self.operationQuestions as List<OperationQuestion>;
+    final operationQuestions = self.operationQuestions as List<OperationQuestion>;
     final editingIndex = self.editingOperationIndex as int?;
 
     return SingleChildScrollView(
@@ -1340,28 +1353,19 @@ mixin OperationQuestionMixin on State {
           borderRadius: BorderRadius.circular(8),
         ),
         columns: const [
-          DataColumn(
-              label: Text('题型', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(
-              label: Text('题号', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(
-              label:
-                  Text('题目描述', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(
-              label:
-                  Text('初始文件', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(
-              label: Text('检查项', style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(
-              label: Text('分值', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('题型', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('题号', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('题目描述', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('初始文件', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('检查项', style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(label: Text('分值', style: TextStyle(fontWeight: FontWeight.bold))),
         ],
         rows: operationQuestions.asMap().entries.map((entry) {
           final index = entry.key;
           final q = entry.value;
           final isEditing = editingIndex == index;
-          final previewText = q.questionText.length > 30
-              ? '${q.questionText.substring(0, 30)}...'
-              : q.questionText;
+          final previewText =
+              q.questionText.length > 30 ? '${q.questionText.substring(0, 30)}...' : q.questionText;
           final fileCount = q.initialFiles.length;
           int answerCount = 0;
           int totalScore = 0;
@@ -1377,8 +1381,7 @@ mixin OperationQuestionMixin on State {
             }
           }
           return DataRow(
-            color: MaterialStateProperty.all(
-                isEditing ? AppTheme.primaryBlue.withAlpha(26) : null),
+            color: MaterialStateProperty.all(isEditing ? AppTheme.primaryBlue.withAlpha(26) : null),
             onSelectChanged: (_) => loadOperationQuestionToForm(index),
             cells: [
               DataCell(Text('操作题')),

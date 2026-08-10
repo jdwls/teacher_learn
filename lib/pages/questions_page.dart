@@ -111,6 +111,14 @@ class _QuestionsPageState extends State
   void initState() {
     super.initState();
     initializeMatchingItemControllers();
+    for (var i = 0; i < operationFileCount; i++) {
+      operationFileControllers.add(OperationFileController());
+    }
+    for (var i = 0; i < operationAnswerCount; i++) {
+      final controller = OperationAnswerController();
+      controller.lineCheckControllers.add(OperationLineCheckController());
+      operationAnswerControllers.add(controller);
+    }
   }
 
   // ========== 生命周期 ==========
@@ -191,8 +199,8 @@ class _QuestionsPageState extends State
   // ========== 题库保存（被所有 mixin 通过 self.saveQuestionsToFile() 调用） ==========
 
   @override
-  Future<void> saveQuestionsToFile() async {
-    if (selectedBank == null) return;
+  Future<bool> saveQuestionsToFile() async {
+    if (selectedBank == null) return false;
 
     final questionsData = questions.map((q) {
       return {
@@ -240,6 +248,7 @@ class _QuestionsPageState extends State
           backgroundColor: Colors.red,
         ),
       );
+      return false;
     } else if (success && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -249,6 +258,7 @@ class _QuestionsPageState extends State
         ),
       );
     }
+    return success;
   }
 
   // ========== 考试时间配置 ==========
@@ -342,7 +352,6 @@ class _QuestionsPageState extends State
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _buildTopBar(),
-                const SizedBox(height: 16),
                 if (selectedQuestionType == '选择题')
                   buildQuestionForm()
                 else if (selectedQuestionType == '连线题')
@@ -353,7 +362,6 @@ class _QuestionsPageState extends State
                   buildTypingQuestionForm()
                 else
                   buildOperationQuestionForm(),
-                const SizedBox(height: 16),
                 if (selectedQuestionType == '选择题')
                   buildQuestionTable()
                 else if (selectedQuestionType == '连线题')

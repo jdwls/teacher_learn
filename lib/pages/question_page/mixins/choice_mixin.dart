@@ -604,6 +604,7 @@ mixin ChoiceQuestionMixin on State {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -710,7 +711,10 @@ mixin ChoiceQuestionMixin on State {
             ],
           ),
           const SizedBox(height: 16),
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text(
                 '答案：',
@@ -720,7 +724,6 @@ mixin ChoiceQuestionMixin on State {
                   color: hasBank ? AppTheme.textPrimary : Colors.grey,
                 ),
               ),
-              const SizedBox(width: 12),
               buildAnswerChip('A', hasBank),
               const SizedBox(width: 8),
               buildAnswerChip('B', hasBank),
@@ -771,7 +774,6 @@ mixin ChoiceQuestionMixin on State {
                   ),
                 ),
               ),
-              const Spacer(),
               ElevatedButton.icon(
                 onPressed: hasBank ? saveQuestion : null,
                 icon: Icon(
@@ -861,6 +863,7 @@ mixin ChoiceQuestionMixin on State {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

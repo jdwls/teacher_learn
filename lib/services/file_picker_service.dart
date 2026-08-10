@@ -57,12 +57,13 @@ class FilePickerService {
       }
 
       final file = result.files.first;
-      if (file.path == null) {
+      final filePath = file.path;
+      if (filePath == null || filePath.isEmpty) {
         return null;
       }
 
       // 读取文件内容
-      final content = await readFileContent(file.path!);
+      final content = await readFileContent(filePath);
       if (content == null) {
         return null;
       }
@@ -72,7 +73,7 @@ class FilePickerService {
       final fileSize = file.size;
 
       return FilePickResult(
-        filePath: file.path!,
+        filePath: filePath,
         fileName: file.name,
         content: content,
         lineCount: lineCount,
@@ -207,7 +208,11 @@ class FilePickerService {
       }
 
       // 复制文件到缓存目录
-      final sourceFile = File(file.path!);
+      final sourcePath = file.path;
+      if (sourcePath == null || sourcePath.isEmpty) {
+        return null;
+      }
+      final sourceFile = File(sourcePath);
       final cachePath = '$cacheDir/${file.name}';
       await sourceFile.copy(cachePath);
 
@@ -223,7 +228,7 @@ class FilePickerService {
       print('文件已缓存到: $cachePath');
 
       return FilePickResult(
-        filePath: file.path!,
+        filePath: sourcePath,
         fileName: file.name,
         content: content,
         lineCount: lineCount,

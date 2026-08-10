@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -23,6 +25,7 @@ import 'services/http_server_service.dart';
 import 'theme/app_theme.dart';
 
 void main() async {
+  debugPaintSizeEnabled = false; // 禁用布局边界调试
   WidgetsFlutterBinding.ensureInitialized();
 
   // 启动 HTTP API 服务器（带超时保护）
@@ -30,10 +33,12 @@ void main() async {
   try {
     await HttpServerService.instance
         .startServer(20020)
-        .timeout(const Duration(seconds: 10), onTimeout: () {
-      print('警告: HTTP API 服务器启动超时（10秒），跳过');
-    });
+        .timeout(const Duration(seconds: 10));
     httpServerStarted = true;
+  } on TimeoutException {
+    // 超时后服务器可能仍在后台完成绑定，使用实际运行状态确认。
+    httpServerStarted = HttpServerService.instance.isRunning;
+    print('警告: HTTP API 服务器启动超时（10秒）${httpServerStarted ? '，但服务已绑定' : '，跳过'}');
   } catch (e) {
     print('HTTP API 服务器启动失败: $e');
   }
@@ -43,10 +48,10 @@ void main() async {
   try {
     await ServerService.instance
         .startServer()
-        .timeout(const Duration(seconds: 10), onTimeout: () {
-      print('警告: Socket 服务器启动超时（10秒），跳过');
-    });
+        .timeout(const Duration(seconds: 10));
     socketServerStarted = true;
+  } on TimeoutException {
+    print('警告: Socket 服务器启动超时（10秒），跳过');
   } catch (e) {
     print('Socket 服务器启动失败: $e');
   }

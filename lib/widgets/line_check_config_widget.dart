@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
@@ -56,6 +57,32 @@ class _LineCheckConfigWidgetState extends State<LineCheckConfigWidget> {
     }
   }
 
+  @override
+  void didUpdateWidget(LineCheckConfigWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.existingItems != oldWidget.existingItems) {
+      for (final controller in _controllers) {
+        controller.dispose();
+      }
+      _controllers.clear();
+      _items = List.from(widget.existingItems);
+      for (final item in _items) {
+        _controllers.add(_LineCheckController.fromItem(item));
+      }
+      if (_controllers.isEmpty) {
+        _controllers.add(_LineCheckController());
+        _items.add(LineCheckItem(
+          targetPath: widget.availableFiles.isNotEmpty
+              ? widget.availableFiles.first
+              : '',
+          lineNumber: 1,
+          expectedContent: '',
+          score: 5,
+        ));
+      }
+    }
+  }
+
   void _addNewItem() {
     setState(() {
       _controllers.add(_LineCheckController());
@@ -82,8 +109,15 @@ class _LineCheckConfigWidgetState extends State<LineCheckConfigWidget> {
 
   Future<void> _previewLine(int index) async {
     final ctrl = _controllers[index];
-    final lineNumber = int.tryParse(ctrl.lineNumberController.text) ?? 1;
+    final lineNumber = int.tryParse(ctrl.lineNumberController.text);
     final fileName = ctrl.selectedFileName;
+
+    if (lineNumber == null || lineNumber < 1 || lineNumber > 100000) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('行号范围必须为1-100000'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
 
     if (fileName.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -112,11 +146,27 @@ class _LineCheckConfigWidgetState extends State<LineCheckConfigWidget> {
 
   void _updateItem(int index) {
     final ctrl = _controllers[index];
+    final lineNum = int.tryParse(ctrl.lineNumberController.text);
+    final score = int.tryParse(ctrl.scoreController.text);
+
+    if (lineNum == null || lineNum < 1 || lineNum > 100000) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('行号范围必须为1-100000'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+    if (score == null || score < 1 || score > 1000) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('分值必须为1-1000的整数'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
     final item = LineCheckItem(
       targetPath: ctrl.selectedFileName,
-      lineNumber: int.tryParse(ctrl.lineNumberController.text) ?? 1,
+      lineNumber: lineNum,
       expectedContent: ctrl.expectedContentController.text,
-      score: int.tryParse(ctrl.scoreController.text) ?? 5,
+      score: score,
     );
 
     setState(() {
@@ -413,17 +463,25 @@ class _LinePreviewDialogState extends State<_LinePreviewDialog> {
   }
 
   Future<void> _loadLineContext() async {
-    // TODO: 从实际文件加载内容
-    // 这里需要从已选择的文件中读取指定行的前后文
-    // 暂时使用模拟数据
-    await Future.delayed(const Duration(milliseconds: 500));
-
+    try {
+      final file = File(widget.fileName);
+      if (await file.exists()) {
+        final lines = await file.readAsLines();
+        final start = (widget.lineNumber - 2).clamp(0, lines.length);
+        final end = (widget.lineNumber + 1).clamp(0, lines.length);
+        if (!mounted) return;
+        setState(() {
+          _contextLines = lines.sublist(start, end);
+          _isLoading = false;
+        });
+        return;
+      }
+    } catch (_) {
+      // 文件不可读时显示明确提示，不伪造文件内容。
+    }
+    if (!mounted) return;
     setState(() {
-      _contextLines = [
-        '// 前一行内容（第 ${widget.lineNumber - 1} 行）',
-        '// 目标行内容（第 ${widget.lineNumber} 行）',
-        '// 后一行内容（第 ${widget.lineNumber + 1} 行）',
-      ];
+      _contextLines = const ['无法读取实际文件内容'];
       _isLoading = false;
     });
   }

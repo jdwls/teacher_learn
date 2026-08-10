@@ -5,6 +5,8 @@ class ApiService {
   // 教师端 API 地址（本地）
   static const String baseUrl = 'http://localhost:20020/api';
 
+  static const Duration _defaultTimeout = Duration(seconds: 10);
+
   final http.Client _client = http.Client();
 
   Future<Map<String, dynamic>> get(String endpoint) async {
@@ -12,7 +14,7 @@ class ApiService {
       final response = await _client.get(
         Uri.parse('$baseUrl$endpoint'),
         headers: {'Content-Type': 'application/json'},
-      );
+      ).timeout(_defaultTimeout);
 
       if (response.statusCode == 200) {
         return json.decode(response.body);
@@ -31,7 +33,7 @@ class ApiService {
         Uri.parse('$baseUrl$endpoint'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(data),
-      );
+      ).timeout(_defaultTimeout);
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         return json.decode(response.body);
@@ -50,7 +52,7 @@ class ApiService {
         Uri.parse('$baseUrl$endpoint'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(data),
-      );
+      ).timeout(_defaultTimeout);
 
       if (response.statusCode == 200) {
         return json.decode(response.body);
@@ -67,7 +69,7 @@ class ApiService {
       final response = await _client.delete(
         Uri.parse('$baseUrl$endpoint'),
         headers: {'Content-Type': 'application/json'},
-      );
+      ).timeout(_defaultTimeout);
 
       return response.statusCode == 200 || response.statusCode == 204;
     } catch (e) {

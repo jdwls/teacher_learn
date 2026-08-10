@@ -73,12 +73,35 @@ class QuestionBankConfigService {
       }
       config['updated_at'] = DateTime.now().toIso8601String();
 
-      // 保存配置
-      final jsonString = const JsonEncoder.withIndent('  ').convert(config);
-      await file.writeAsString(jsonString, flush: true);
+      // 安全保存配置（tmp + flush + 验证 + rename）
+      final tempFile = File('${file.path}.tmp');
+      try {
+        final jsonString = const JsonEncoder.withIndent('  ').convert(config);
 
-      print('题库配置已保存: $configPath');
-      return true;
+        // 1. 写入临时文件并 flush
+        await tempFile.writeAsString(jsonString, flush: true);
+
+        // 2. 验证 JSON 格式
+        json.decode(await tempFile.readAsString());
+
+        // 3. 原子替换
+        if (await file.exists()) {
+          await file.delete();
+        }
+        await tempFile.rename(file.path);
+
+        print('题库配置已保存: $configPath');
+        return true;
+      } catch (e) {
+        print('保存题库配置失败: $e');
+        // 清理临时文件
+        try {
+          if (await tempFile.exists()) {
+            await tempFile.delete();
+          }
+        } catch (_) {}
+        return false;
+      }
     } catch (e) {
       print('保存题库配置失败: $e');
       return false;

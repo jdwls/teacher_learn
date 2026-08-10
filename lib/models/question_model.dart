@@ -26,6 +26,10 @@ class QuestionModel {
   });
 
   factory QuestionModel.fromJson(Map<String, dynamic> json) {
+    final scoreValue = json['score'];
+    final score = scoreValue is num
+        ? scoreValue.toInt()
+        : int.tryParse(scoreValue?.toString() ?? '');
     return QuestionModel(
       id: json['id']?.toString() ?? '',
       content:
@@ -34,7 +38,7 @@ class QuestionModel {
       options: json['options']?.toString(),
       correctAnswer:
           json['correct_answer']?.toString() ?? json['answer']?.toString(),
-      score: json['score'] as int?,
+      score: score,
       difficulty: json['difficulty']?.toString(),
       chapter: json['chapter']?.toString(),
       analysis: json['analysis']?.toString(),

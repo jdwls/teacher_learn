@@ -46,17 +46,17 @@ class StudentStatusInfo {
 
   factory StudentStatusInfo.fromJson(Map<String, dynamic> json) {
     return StudentStatusInfo(
-      id: json['id'] ?? '',
-      name: json['name'] ?? '',
-      classId: json['class_id'] ?? '',
-      computerName: json['computer_name'] ?? '',
-      ip: json['ip'] ?? '',
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      classId: json['class_id']?.toString() ?? '',
+      computerName: json['computer_name']?.toString() ?? '',
+      ip: json['ip']?.toString() ?? '',
       registerTime: json['register_time'] != null
-          ? DateTime.parse(json['register_time'])
+          ? (DateTime.tryParse(json['register_time'].toString()) ?? DateTime.now())
           : DateTime.now(),
-      status: parseStatus(json['status']),
+      status: parseStatus(json['status']?.toString()),
       lastHeartbeat: json['last_heartbeat'] != null
-          ? DateTime.parse(json['last_heartbeat'])
+          ? (DateTime.tryParse(json['last_heartbeat'].toString()) ?? DateTime.now())
           : DateTime.now(),
     );
   }

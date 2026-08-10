@@ -41,13 +41,14 @@ class ExamProvider extends ChangeNotifier {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true) {
-          final List<dynamic> banks = data['data'] ?? [];
-          _exams = banks.asMap().entries.map((entry) {
-            final bank = entry.value as Map<String, dynamic>;
+          final banks = data['data'] is List ? data['data'] as List : <dynamic>[];
+          _exams = banks.asMap().entries.where((entry) => entry.value is Map).map((entry) {
+            final bank = Map<String, dynamic>.from(entry.value as Map);
+            final bankName = bank['name']?.toString() ?? '';
             return ExamModel(
               id: '${entry.key}',
-              name: bank['name'] ?? '',
-              description: '题库: ${bank['name'] ?? ''}',
+              name: bankName,
+              description: '题库: $bankName',
               duration: 300,
               totalScore: 100,
               status: 'published',
@@ -71,11 +72,15 @@ class ExamProvider extends ChangeNotifier {
 
     final newExam = ExamModel(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: examData['name'] ?? '',
-      description: examData['description'],
-      duration: examData['duration'],
-      totalScore: examData['total_score'],
-      status: examData['status'] ?? 'draft',
+      name: examData['name']?.toString() ?? '',
+      description: examData['description']?.toString(),
+      duration: examData['duration'] is num
+          ? (examData['duration'] as num).toInt()
+          : int.tryParse(examData['duration']?.toString() ?? ''),
+      totalScore: examData['total_score'] is num
+          ? (examData['total_score'] as num).toInt()
+          : int.tryParse(examData['total_score']?.toString() ?? ''),
+      status: examData['status']?.toString() ?? 'draft',
       createdAt: DateTime.now(),
     );
     _exams.add(newExam);
@@ -94,11 +99,15 @@ class ExamProvider extends ChangeNotifier {
       final oldExam = _exams[index];
       _exams[index] = ExamModel(
         id: oldExam.id,
-        name: updates['name'] ?? oldExam.name,
-        description: updates['description'] ?? oldExam.description,
-        duration: updates['duration'] ?? oldExam.duration,
-        totalScore: updates['total_score'] ?? oldExam.totalScore,
-        status: updates['status'] ?? oldExam.status,
+        name: updates['name']?.toString() ?? oldExam.name,
+        description: updates['description']?.toString() ?? oldExam.description,
+        duration: updates['duration'] is num
+            ? (updates['duration'] as num).toInt()
+            : int.tryParse(updates['duration']?.toString() ?? '') ?? oldExam.duration,
+        totalScore: updates['total_score'] is num
+            ? (updates['total_score'] as num).toInt()
+            : int.tryParse(updates['total_score']?.toString() ?? '') ?? oldExam.totalScore,
+        status: updates['status']?.toString() ?? oldExam.status,
         createdAt: oldExam.createdAt,
         updatedAt: DateTime.now(),
       );

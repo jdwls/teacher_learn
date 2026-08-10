@@ -37,6 +37,14 @@ class _OperationFileImportWidgetState extends State<OperationFileImportWidget> {
     _selectedFile = widget.existingFile;
   }
 
+  @override
+  void didUpdateWidget(OperationFileImportWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.existingFile?.filePath != oldWidget.existingFile?.filePath) {
+      _selectedFile = widget.existingFile;
+    }
+  }
+
   Future<void> _pickFile() async {
     if (!widget.enabled) return;
 
@@ -46,6 +54,7 @@ class _OperationFileImportWidgetState extends State<OperationFileImportWidget> {
 
     try {
       final result = await FilePickerService.pickSingleFile();
+      if (!mounted) return;
       if (result != null) {
         setState(() {
           _selectedFile = result;
@@ -53,9 +62,11 @@ class _OperationFileImportWidgetState extends State<OperationFileImportWidget> {
         widget.onFilePicked(result);
       }
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 

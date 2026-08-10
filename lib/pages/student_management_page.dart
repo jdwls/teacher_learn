@@ -112,7 +112,6 @@ class _StudentManagementPageState extends State<StudentManagementPage>
       children: [
         // Tab 栏
         Container(
-          margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
@@ -158,8 +157,6 @@ class _StudentManagementPageState extends State<StudentManagementPage>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildSectionTitle('学生管理', '管理班级学生信息。'),
-              const SizedBox(height: 16),
               _buildStudentContent(),
             ],
           ),
@@ -202,8 +199,6 @@ class _StudentManagementPageState extends State<StudentManagementPage>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildSectionTitle('班级管理', '管理班级信息，支持班级升级。'),
-              const SizedBox(height: 16),
               if (isWide)
                 _buildWideClassLayout()
               else
@@ -225,12 +220,6 @@ class _StudentManagementPageState extends State<StudentManagementPage>
           flex: 3,
           child: _buildClassListCard(),
         ),
-        const SizedBox(width: 16),
-        // 右侧：升级说明
-        Expanded(
-          flex: 2,
-          child: _buildUpgradeInfoCard(),
-        ),
       ],
     );
   }
@@ -240,8 +229,6 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     return Column(
       children: [
         _buildClassListCard(),
-        const SizedBox(height: 16),
-        _buildUpgradeInfoCard(),
       ],
     );
   }
@@ -308,12 +295,19 @@ class _StudentManagementPageState extends State<StudentManagementPage>
               ),
             )
           else
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: _allClassIds.map((classId) {
-                return _buildClassCard(classId);
-              }).toList(),
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 5,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+                childAspectRatio: 1.8,
+              ),
+              itemCount: _allClassIds.length,
+              itemBuilder: (context, index) {
+                return _buildClassCard(_allClassIds[index]);
+              },
             ),
         ],
       ),
@@ -326,7 +320,6 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     final canUpgrade = nextClassId != null;
 
     return Container(
-      width: 200,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFFF8FAFC),
@@ -335,6 +328,7 @@ class _StudentManagementPageState extends State<StudentManagementPage>
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Row(
             children: [
@@ -395,95 +389,6 @@ class _StudentManagementPageState extends State<StudentManagementPage>
                         TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
               ),
             ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildUpgradeInfoCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF7ED),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFFDBA74)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.info_outline, size: 20, color: Color(0xFFEA580C)),
-              SizedBox(width: 8),
-              Text('升级说明',
-                  style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 16,
-                      color: Color(0xFFEA580C))),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _buildInfoItem('初一 → 初二', '将初一班级升级为初二班级'),
-          _buildInfoItem('初二 → 初三', '将初二班级升级为初三班级'),
-          _buildInfoItem('初三', '最高年级，无法继续升级'),
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFFDBA74)),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.warning_amber, size: 18, color: Color(0xFFEA580C)),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '升级操作会将班级内所有学生的班级信息一并更新，并删除原班级目录。此操作不可撤销。',
-                    style: TextStyle(fontSize: 13, color: Color(0xFF92400E)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoItem(String title, String desc) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            margin: const EdgeInsets.only(top: 6),
-            decoration: const BoxDecoration(
-              color: Color(0xFFEA580C),
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: RichText(
-              text: TextSpan(children: [
-                TextSpan(
-                    text: '$title：',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                        color: AppTheme.textPrimary)),
-                TextSpan(
-                    text: desc,
-                    style: const TextStyle(
-                        fontSize: 13, color: AppTheme.textSecondary)),
-              ]),
-            ),
-          ),
         ],
       ),
     );
@@ -596,20 +501,34 @@ class _StudentManagementPageState extends State<StudentManagementPage>
   /// 执行班级升级
   Future<void> _upgradeClass(String oldClassId, String newClassId) async {
     try {
-      final students = _httpService.loadClassStudents(oldClassId);
-
-      // 更新所有学生的 class_id
-      for (final student in students) {
-        student['class_id'] = newClassId;
+      // 检查目标班级是否已存在
+      final newClassDir = Directory('${AppPath.informationDir}/$newClassId');
+      if (newClassDir.existsSync()) {
+        final existingStudents = _httpService.loadClassStudents(newClassId);
+        if (existingStudents.isNotEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('目标班级已存在学生数据，无法升级，请先处理目标班级'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+          return;
+        }
       }
 
-      // 保存到新班级目录
-      if (students.isNotEmpty) {
-        // 逐个保存学生到新班级
-        for (final student in students) {
-          await _httpService.saveStudentToClass(newClassId, student);
-        }
-      } else {
+      final students = _httpService.loadClassStudents(oldClassId);
+
+    final copiedStudents = students
+        .map((s) => Map<String, dynamic>.from(s)..['class_id'] = newClassId)
+        .toList();
+
+    // 先完整写入并确认新班级文件成功，再删除旧班级。
+    if (!await _httpService.replaceClassStudents(newClassId, copiedStudents)) {
+      throw Exception('新班级数据持久化失败，已保留旧班级');
+    }
+    if (students.isEmpty) {
         final dir = Directory('${AppPath.informationDir}/$newClassId');
         if (!dir.existsSync()) {
           dir.createSync(recursive: true);
@@ -662,22 +581,6 @@ class _StudentManagementPageState extends State<StudentManagementPage>
   }
 
   // ==================== 共用组件 ====================
-
-  Widget _buildSectionTitle(String title, String subtitle) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title,
-            style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                color: AppTheme.textPrimary)),
-        const SizedBox(height: 4),
-        Text(subtitle,
-            style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-      ],
-    );
-  }
 
   // 年级/班级选择器
   Widget _buildClassSelector() {
@@ -930,7 +833,11 @@ class _StudentManagementPageState extends State<StudentManagementPage>
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      child: DataTable(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minWidth: MediaQuery.of(context).size.width - 64,
+        ),
+        child: DataTable(
         headingRowColor: MaterialStateProperty.all(const Color(0xFFF8FAFC)),
         dataRowMinHeight: 48,
         dataRowMaxHeight: 56,
@@ -1010,6 +917,7 @@ class _StudentManagementPageState extends State<StudentManagementPage>
                 )),
               ]);
         }).toList(),
+        ),
       ),
     );
   }
@@ -1075,14 +983,13 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     updatedStudent['class_id'] = newClassId;
 
     if (oldClassId != null && oldClassId != newClassId) {
+      // 从旧班级移除学生
       final oldStudents = _httpService.loadClassStudents(oldClassId);
       oldStudents.removeWhere((s) => s['id'] == updatedStudent['id']);
-      final oldData = {
-        'class_id': oldClassId,
-        'students': oldStudents,
-        'updated_at': DateTime.now().toIso8601String(),
-      };
-      await _httpService.saveStudentToClass(oldClassId, oldData);
+      // 逐个保存旧班级的剩余学生（更新缓存并标记脏数据）
+      for (final s in oldStudents) {
+        await _httpService.saveStudentToClass(oldClassId, s);
+      }
     }
 
     await _httpService.saveStudentToClass(newClassId, updatedStudent);
@@ -1177,12 +1084,10 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     final students = _httpService.loadClassStudents(classId);
     students.removeWhere((s) => s['id'] == student['id']);
 
-    final data = {
-      'class_id': classId,
-      'students': students,
-      'updated_at': DateTime.now().toIso8601String(),
-    };
-    await _httpService.saveStudentToClass(classId, data);
+    final success = await _httpService.replaceClassStudents(classId, students);
+    if (!success) {
+      throw Exception('学生删除后班级数据保存失败');
+    }
 
     if (_editingStudent != null && _editingStudent!['id'] == student['id']) {
       _clearEditPanel();

@@ -2,12 +2,13 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
+import '../utils/app_path.dart';
 
 /// 图片管理服务类
 class ImageService {
   /// 获取题库根目录（当前工作目录下的题库文件夹）
   static String getQuestionBankRootDir() {
-    return '${Directory.current.path}/题库';
+    return '${AppPath.projectRoot}/题库';
   }
 
   /// 获取题库图片存储目录（当前工作目录下）
@@ -86,8 +87,12 @@ class ImageService {
       );
       final targetPath = '$imageDir/$fileName';
 
-      // 复制文件到目标目录
-      final sourceFile = File(pickedFile.path!);
+      final sourcePath = pickedFile.path;
+      if (sourcePath == null || sourcePath.isEmpty) {
+        print('ImageService: 选择的图片没有可用路径');
+        return null;
+      }
+      final sourceFile = File(sourcePath);
       await sourceFile.copy(targetPath);
 
       // 返回相对路径

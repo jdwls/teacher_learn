@@ -21,6 +21,8 @@ class _StatisticsPageState extends State<StatisticsPage>
   int _sortColumnIndex = 2; // 默认按得分排序
   bool _sortAscending = false; // 默认降序
 
+  bool _dependenciesSyncScheduled = false;
+
   @override
   void initState() {
     super.initState();
@@ -34,6 +36,8 @@ class _StatisticsPageState extends State<StatisticsPage>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (_dependenciesSyncScheduled) return;
+    _dependenciesSyncScheduled = true;
     // 监听首页同步的题库变化（延迟到下一帧避免在build期间调用setState）
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;

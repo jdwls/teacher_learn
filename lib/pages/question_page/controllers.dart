@@ -74,6 +74,9 @@ class OperationAnswerController {
     targetPathController.clear();
     keywordsController.clear();
     scoreController.text = '5';
+    for (final ctrl in lineCheckControllers) {
+      ctrl.dispose();
+    }
     lineCheckControllers.clear();
   }
 

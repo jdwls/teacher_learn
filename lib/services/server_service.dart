@@ -371,7 +371,7 @@ class ServerService {
                 if (jsonData['status'] != null) {
                   conn.studentStatus = jsonData['status'];
                 }
-                socket.write(json.encode({'type': 'ack'}));
+                socket.write('${json.encode({'type': 'ack'})}\n');
                 _debouncedSave(); // 防抖保存，避免频繁写磁盘
                 _debouncedNotify(); // 批量通知UI刷新
               }
@@ -380,7 +380,7 @@ class ServerService {
               if (conn != null) {
                 conn.studentStatus = jsonData['status'] ?? 'online';
                 conn.lastHeartbeat = DateTime.now();
-                socket.write(json.encode({'type': 'status_ack'}));
+                socket.write('${json.encode({'type': 'status_ack'})}\n');
                 _debouncedSave(); // 防抖保存
                 _debouncedNotify(); // 批量通知UI刷新
               }
@@ -564,7 +564,9 @@ class ServerService {
 
   void dispose() {
     _saveDebounceTimer?.cancel();
+    _saveDebounceTimer = null;
     _notifyDebounceTimer?.cancel();
+    _notifyDebounceTimer = null;
     _heartbeatTimeoutTimer?.cancel();
     _heartbeatTimeoutTimer = null;
 

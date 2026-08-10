@@ -46,9 +46,13 @@ class QuestionProvider extends ChangeNotifier {
 
     try {
       final response = await _apiService.get('/questions');
-      if (response.containsKey('data')) {
-        final List<dynamic> data = response['data'];
-        _questions = data.map((json) => QuestionModel.fromJson(json)).toList();
+      if (response['data'] is List) {
+        final data = response['data'] as List;
+        _questions = data
+            .whereType<Map>()
+            .map((json) => QuestionModel.fromJson(
+                Map<String, dynamic>.from(json)))
+            .toList();
       }
     } catch (e) {
       // API失败时使用模拟数据
@@ -186,13 +190,15 @@ class QuestionProvider extends ChangeNotifier {
       // API失败时使用模拟创建
       final newQuestion = QuestionModel(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
-        content: questionData['content'] ?? '',
-        type: questionData['type'] ?? 'single',
-        options: questionData['options'],
-        correctAnswer: questionData['correct_answer'],
-        score: questionData['score'] ?? 20,
-        difficulty: questionData['difficulty'] ?? 'medium',
-        chapter: questionData['chapter'],
+        content: questionData['content']?.toString() ?? '',
+        type: questionData['type']?.toString() ?? 'single',
+        options: questionData['options']?.toString(),
+        correctAnswer: questionData['correct_answer']?.toString(),
+        score: questionData['score'] is num
+    ? (questionData['score'] as num).toInt()
+    : int.tryParse(questionData['score']?.toString() ?? '') ?? 20,
+        difficulty: questionData['difficulty']?.toString() ?? 'medium',
+        chapter: questionData['chapter']?.toString(),
       );
       _questions.add(newQuestion);
       _isLoading = false;
@@ -219,14 +225,16 @@ class QuestionProvider extends ChangeNotifier {
         final oldQuestion = _questions[index];
         _questions[index] = QuestionModel(
           id: oldQuestion.id,
-          content: updates['content'] ?? oldQuestion.content,
-          type: updates['type'] ?? oldQuestion.type,
-          options: updates['options'] ?? oldQuestion.options,
-          correctAnswer: updates['correct_answer'] ?? oldQuestion.correctAnswer,
-          score: updates['score'] ?? oldQuestion.score,
-          difficulty: updates['difficulty'] ?? oldQuestion.difficulty,
-          chapter: updates['chapter'] ?? oldQuestion.chapter,
-          analysis: updates['analysis'] ?? oldQuestion.analysis,
+          content: updates['content']?.toString() ?? oldQuestion.content,
+          type: updates['type']?.toString() ?? oldQuestion.type,
+          options: updates['options']?.toString() ?? oldQuestion.options,
+          correctAnswer: updates['correct_answer']?.toString() ?? oldQuestion.correctAnswer,
+          score: updates['score'] is num
+              ? (updates['score'] as num).toInt()
+              : int.tryParse(updates['score']?.toString() ?? '') ?? oldQuestion.score,
+          difficulty: updates['difficulty']?.toString() ?? oldQuestion.difficulty,
+          chapter: updates['chapter']?.toString() ?? oldQuestion.chapter,
+          analysis: updates['analysis']?.toString() ?? oldQuestion.analysis,
           createdAt: oldQuestion.createdAt,
           updatedAt: DateTime.now(),
         );

@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../theme/app_theme.dart';
@@ -72,6 +72,7 @@ class _TypingControlPageState extends State<TypingControlPage>
           final scheduleData = data['data'] as Map<String, dynamic>;
           final periods = scheduleData['periods'] as List<dynamic>?;
           final days = scheduleData['days'] as Map<String, dynamic>?;
+          if (!mounted) return;
           setState(() {
             if (periods != null) {
               for (int i = 0; i < periods.length && i < _periods.length; i++) {
@@ -150,6 +151,7 @@ class _TypingControlPageState extends State<TypingControlPage>
           final config = data['data'] as Map<String, dynamic>;
           final chinese = config['chinese'] as Map<String, dynamic>? ?? {};
           final english = config['english'] as Map<String, dynamic>? ?? {};
+          if (!mounted) return;
           setState(() {
             _chineseTimeLimit = chinese['time_limit'] ?? _chineseTimeLimit;
             _chineseTargetChars =
@@ -179,33 +181,53 @@ class _TypingControlPageState extends State<TypingControlPage>
     }
   }
 
-  Future<void> _syncConfigToServer() async {
+  Future<bool> _syncConfigToServer() async {
     try {
-      await http.post(
-        Uri.parse('http://localhost:20020/api/typing-config'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'chinese': {
-            'time_limit': _chineseTimeLimit,
-            'target_chars': _chineseTargetChars,
-            'target_speed': _chineseTargetSpeed,
-            'points_per_error': _chinesePointsPerError,
-            'random': _chineseRandom,
-            'selected_article_index': _chineseSelectedArticleIndex,
-          },
-          'english': {
-            'time_limit': _englishTimeLimit,
-            'target_chars': _englishTargetChars,
-            'target_speed': _englishTargetSpeed,
-            'points_per_error': _englishPointsPerError,
-            'random': _englishRandom,
-            'selected_article_index': _englishSelectedArticleIndex,
-          },
-        }),
-      );
+      final response = await http
+          .post(
+            Uri.parse('http://localhost:20020/api/typing-config'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'chinese': {
+                'time_limit': _chineseTimeLimit,
+                'target_chars': _chineseTargetChars,
+                'target_speed': _chineseTimeLimit > 0
+                    ? (_chineseTargetChars / _chineseTimeLimit).round()
+                    : _chineseTargetSpeed,
+                'points_per_error': _chinesePointsPerError,
+                'random': _chineseRandom,
+                'selected_article_index': _chineseSelectedArticleIndex,
+              },
+              'english': {
+                'time_limit': _englishTimeLimit,
+                'target_chars': _englishTargetChars,
+                'target_speed': _englishTimeLimit > 0
+                    ? (_englishTargetChars / _englishTimeLimit).round()
+                    : _englishTargetSpeed,
+                'points_per_error': _englishPointsPerError,
+                'random': _englishRandom,
+                'selected_article_index': _englishSelectedArticleIndex,
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        return true;
+      }
+      print('同步打字配置失败: HTTP ${response.statusCode}');
     } catch (e) {
       print('同步打字配置失败: $e');
     }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('配置保存失败，请检查网络连接'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+    return false;
   }
 
   @override
@@ -213,7 +235,6 @@ class _TypingControlPageState extends State<TypingControlPage>
     return Column(
       children: [
         Container(
-          margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
@@ -243,8 +264,6 @@ class _TypingControlPageState extends State<TypingControlPage>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildSectionTitle('学生端控制', '配置学生端打字练习参数。'),
-                    const SizedBox(height: 16),
                     _buildConfigSection(),
                   ],
                 ),
@@ -254,8 +273,6 @@ class _TypingControlPageState extends State<TypingControlPage>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildSectionTitle('课表管理', '信息科技 · 周课表'),
-                    const SizedBox(height: 16),
                     _buildScheduleTable(),
                     const SizedBox(height: 16),
                     Center(
@@ -410,42 +427,46 @@ class _TypingControlPageState extends State<TypingControlPage>
         _schedule[period][day].isEmpty ? null : _schedule[period][day];
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('选择班级 · ${_weekdays[day]} ${_periods[period]['time']}'),
-        content: SizedBox(
-          width: 300,
-          child: DropdownButtonFormField<String>(
-            value: selected,
-            hint: const Text('选择班级'),
-            isExpanded: true,
-            items: [
-              const DropdownMenuItem<String>(
-                value: '',
-                child: Text('（空）', style: TextStyle(color: Colors.grey)),
-              ),
-              ..._classList.map((c) => DropdownMenuItem(
-                    value: c,
-                    child: Text(c),
-                  )),
-            ],
-            onChanged: (v) {
-              selected = v;
-            },
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, dialogSetState) => AlertDialog(
+          title: Text('选择班级 · ${_weekdays[day]} ${_periods[period]['time']}'),
+          content: SizedBox(
+            width: 300,
+            child: DropdownButtonFormField<String>(
+              value: selected,
+              hint: const Text('选择班级'),
+              isExpanded: true,
+              items: [
+                const DropdownMenuItem<String>(
+                  value: '',
+                  child: Text('（空）', style: TextStyle(color: Colors.grey)),
+                ),
+                ..._classList.map((c) => DropdownMenuItem(
+                      value: c,
+                      child: Text(c),
+                    )),
+              ],
+              onChanged: (v) {
+                dialogSetState(() {
+                  selected = v;
+                });
+              },
+            ),
           ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  _schedule[period][day] = selected ?? '';
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text('确定'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          ElevatedButton(
-            onPressed: () {
-              setState(() {
-                _schedule[period][day] = selected ?? '';
-              });
-              Navigator.pop(ctx);
-            },
-            child: const Text('确定'),
-          ),
-        ],
       ),
     );
   }
@@ -478,25 +499,6 @@ class _TypingControlPageState extends State<TypingControlPage>
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildSectionTitle(String title, String subtitle) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title,
-            style: const TextStyle(
-                fontSize: 27,
-                fontWeight: FontWeight.w800,
-                color: AppTheme.textPrimary)),
-        const SizedBox(height: 4),
-        Text(subtitle,
-            style: const TextStyle(
-                fontSize: 20,
-                color: AppTheme.textSecondary,
-                fontWeight: FontWeight.w700)),
-      ],
     );
   }
 
@@ -537,14 +539,8 @@ class _TypingControlPageState extends State<TypingControlPage>
                         }))),
             _buildConfigItem(
                 '目标速度',
-                '$_chineseTargetSpeed 字/分',
-                () => _editValue(
-                    '中文目标速度',
-                    _chineseTargetSpeed,
-                    (v) => setState(() {
-                          _chineseTargetSpeed = v;
-                          _syncConfigToServer();
-                        }))),
+                '${_chineseTimeLimit > 0 ? (_chineseTargetChars / _chineseTimeLimit).round() : _chineseTargetSpeed} 字/分',
+                null),
             _buildConfigItem(
                 '每错扣分',
                 '$_chinesePointsPerError 分',
@@ -570,8 +566,10 @@ class _TypingControlPageState extends State<TypingControlPage>
               articles: _chineseArticles,
               selectedIndex: _chineseSelectedArticleIndex,
               label: '选择中文文章',
-              onChanged: (index) =>
-                  setState(() => _chineseSelectedArticleIndex = index),
+              onChanged: (index) {
+                setState(() => _chineseSelectedArticleIndex = index);
+                _syncConfigToServer();
+              },
             ),
           ],
           const Divider(height: 24),
@@ -598,14 +596,8 @@ class _TypingControlPageState extends State<TypingControlPage>
                         }))),
             _buildConfigItem(
                 '目标速度',
-                '$_englishTargetSpeed 字/分',
-                () => _editValue(
-                    '英文目标速度',
-                    _englishTargetSpeed,
-                    (v) => setState(() {
-                          _englishTargetSpeed = v;
-                          _syncConfigToServer();
-                        }))),
+                '${_englishTimeLimit > 0 ? (_englishTargetChars / _englishTimeLimit).round() : _englishTargetSpeed} 字/分',
+                null),
             _buildConfigItem(
                 '每错扣分',
                 '$_englishPointsPerError 分',
@@ -631,8 +623,10 @@ class _TypingControlPageState extends State<TypingControlPage>
               articles: _englishArticles,
               selectedIndex: _englishSelectedArticleIndex,
               label: '选择英文文章',
-              onChanged: (index) =>
-                  setState(() => _englishSelectedArticleIndex = index),
+              onChanged: (index) {
+                setState(() => _englishSelectedArticleIndex = index);
+                _syncConfigToServer();
+              },
             ),
           ],
         ],
@@ -713,7 +707,7 @@ class _TypingControlPageState extends State<TypingControlPage>
     );
   }
 
-  Widget _buildConfigItem(String label, String value, VoidCallback onEdit) {
+  Widget _buildConfigItem(String label, String value, VoidCallback? onEdit) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
@@ -737,12 +731,14 @@ class _TypingControlPageState extends State<TypingControlPage>
                       fontWeight: FontWeight.w700, fontSize: 20)),
             ],
           ),
-          const SizedBox(width: 8),
-          InkWell(
-            onTap: onEdit,
-            child:
-                const Icon(Icons.edit, size: 16, color: AppTheme.primaryBlue),
-          ),
+          if (onEdit != null) ...[
+            const SizedBox(width: 8),
+            InkWell(
+              onTap: onEdit,
+              child:
+                  const Icon(Icons.edit, size: 16, color: AppTheme.primaryBlue),
+            ),
+          ],
         ],
       ),
     );

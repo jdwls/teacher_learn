@@ -26,6 +26,7 @@ class _DashboardPageState extends State<DashboardPage> {
   List<String> _questionBanks = [];
   String? _selectedBank;
   int _classTotalCount = 0; // 班级总人数
+  bool _isSyncing = false; // 同步按钮互斥锁
 
   final List<String> _grades = ['初一', '初二', '初三'];
   final List<String> _classes =
@@ -118,22 +119,28 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() {
         _selectedBank = savedBank;
       });
-      // 自动同步题库到学生端
-      _syncBankToStudents(savedBank);
+      // 只恢复 UI 选择，不自动同步到服务器（避免覆盖外部设置）
     }
   }
 
   /// 同步题库到学生端
-  void _syncBankToStudents(String bankName) async {
+  Future<String?> _syncBankToStudents(String bankName) async {
     try {
-      await http.post(
+      final response = await http.post(
         Uri.parse('http://localhost:20020/api/active-bank'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'bank': bankName}),
-      );
-      print('自动同步题库: $bankName 到学生端');
+      ).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          return '同步成功';
+        }
+        return '服务器返回错误';
+      }
+      return 'HTTP ${response.statusCode}';
     } catch (e) {
-      // 忽略错误
+      return '网络错误: $e';
     }
   }
 
@@ -185,7 +192,7 @@ class _DashboardPageState extends State<DashboardPage> {
         Uri.parse('http://localhost:20020/api/active-class'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'class_id': classLabel}),
-      );
+      ).timeout(const Duration(seconds: 10));
     } catch (e) {
       // 忽略错误
     }
@@ -210,6 +217,7 @@ class _DashboardPageState extends State<DashboardPage> {
   /// - 如果当前班级有学生已登录（在线），只同步题库，不修改学生数据
   /// - 如果当前班级没有学生在线，同步班级和题库（供下次登录使用）
   void _syncToStudents() async {
+    if (_isSyncing) return;
     if (_selectedBank == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -219,6 +227,7 @@ class _DashboardPageState extends State<DashboardPage> {
       );
       return;
     }
+    _isSyncing = true;
 
     // 检查当前班级是否有学生在线
     final classLabel = '$_selectedGrade$_selectedClass';
@@ -234,7 +243,7 @@ class _DashboardPageState extends State<DashboardPage> {
           Uri.parse('http://localhost:20020/api/active-bank'),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({'bank': _selectedBank}),
-        );
+        ).timeout(const Duration(seconds: 10));
 
         if (response.statusCode == 200) {
           if (!mounted) return;
@@ -248,17 +257,25 @@ class _DashboardPageState extends State<DashboardPage> {
       } else {
         // 【情况B】没有学生在线，同步班级和题库
         // 这里更新的是服务器的配置，不是学生数据文件
-        await http.post(
+        final classResponse = await http.post(
           Uri.parse('http://localhost:20020/api/active-class'),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({'class_id': classLabel}),
-        );
+        ).timeout(const Duration(seconds: 10));
+        if (classResponse.statusCode == 200) {
+          final result = json.decode(classResponse.body);
+          if (result is! Map || result['success'] != true) {
+            throw Exception('设置活跃班级失败');
+          }
+        } else {
+          throw Exception('设置活跃班级失败: HTTP ${classResponse.statusCode}');
+        }
 
         final response = await http.post(
           Uri.parse('http://localhost:20020/api/active-bank'),
           headers: {'Content-Type': 'application/json'},
           body: json.encode({'bank': _selectedBank}),
-        );
+        ).timeout(const Duration(seconds: 10));
 
         if (response.statusCode == 200) {
           if (!mounted) return;
@@ -280,6 +297,7 @@ class _DashboardPageState extends State<DashboardPage> {
         ),
       );
     }
+    _isSyncing = false;
   }
 
   @override
@@ -291,22 +309,19 @@ class _DashboardPageState extends State<DashboardPage> {
           children: [
             // 顶部卡片
             Container(
-              padding: const EdgeInsets.all(16),
-              margin: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
+                border: Border(
+                  bottom: BorderSide(color: Colors.grey[200]!),
+                ),
               ),
               child: isNarrow ? _buildNarrowToolbar() : _buildWideToolbar(),
             ),
-            const SizedBox(height: 8),
             // 在线成员区域
             Expanded(
               child: Container(
-                margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
                 ),
                 child: _buildStudentCards(),
               ),
@@ -319,256 +334,209 @@ class _DashboardPageState extends State<DashboardPage> {
 
   /// 宽屏工具栏布局
   Widget _buildWideToolbar() {
-    return Row(
-      children: [
-        // 年级选择
-        _buildLabel('年级'),
-        const SizedBox(width: 4),
-        Flexible(
-          flex: 2,
-          child: _buildSelector(
-            hint: '年级',
-            value: _selectedGrade,
-            items: _grades,
-            onChanged: (value) {
-              if (value != null) {
-                setState(() {
-                  _selectedGrade = value;
-                });
-                _saveClassSelection();
-                // 不再自动设置服务器活跃班级，仅在点击同步按钮时生效
-              }
-            },
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          // 年级选择
+          _buildLabel('年级'),
+          const SizedBox(width: 4),
+          Flexible(
+            flex: 2,
+            child: _buildSelector(
+              hint: '年级',
+              value: _selectedGrade,
+              items: _grades,
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() {
+                    _selectedGrade = value;
+                  });
+                  _saveClassSelection();
+                }
+              },
+            ),
           ),
-        ),
-        const SizedBox(width: 12),
-        // 班级选择
-        _buildLabel('班级'),
-        const SizedBox(width: 4),
-        Flexible(
-          flex: 2,
-          child: _buildSelector(
-            hint: '班级',
-            value: _selectedClass,
-            items: _classes,
-            onChanged: (value) {
-              if (value != null) {
-                setState(() {
-                  _selectedClass = value;
-                });
-                _saveClassSelection();
-                // 不再自动设置服务器活跃班级，仅在点击同步按钮时生效
-              }
-            },
+          const SizedBox(width: 12),
+          // 班级选择
+          _buildLabel('班级'),
+          const SizedBox(width: 4),
+          Flexible(
+            flex: 2,
+            child: _buildSelector(
+              hint: '班级',
+              value: _selectedClass,
+              items: _classes,
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() {
+                    _selectedClass = value;
+                  });
+                  _saveClassSelection();
+                }
+              },
+            ),
           ),
-        ),
-        const SizedBox(width: 12),
-        // 学生状态统计
-        Flexible(
-          flex: 5,
-          child: Consumer<StudentStatusProvider>(
-            builder: (context, provider, _) {
-              // 计算当前班级的在线、打字、小测人数
-              final classLabel = '$_selectedGrade$_selectedClass';
-              final classStudents = provider.getStudentsByClass(classLabel);
-              final onlineCount = classStudents
-                  .where((s) =>
-                      s.isOnline &&
-                      s.status != StudentStatus.typing &&
-                      s.status != StudentStatus.exam)
-                  .length;
-              final typingCount = classStudents
-                  .where((s) => s.status == StudentStatus.typing)
-                  .length;
-              final examCount = classStudents
-                  .where((s) => s.status == StudentStatus.exam)
-                  .length;
-              // 离线人数 = 班级总人数 - 在线 - 打字 - 小测
-              final offlineCount =
-                  _classTotalCount - onlineCount - typingCount - examCount;
+          const SizedBox(width: 12),
+          // 学生状态统计
+          Flexible(
+            flex: 5,
+            child: Consumer<StudentStatusProvider>(
+              builder: (context, provider, _) {
+                final classLabel = '$_selectedGrade$_selectedClass';
+                final classStudents = provider.getStudentsByClass(classLabel);
+                final onlineCount = classStudents
+                    .where((s) =>
+                        s.isOnline &&
+                        s.status != StudentStatus.typing &&
+                        s.status != StudentStatus.exam)
+                    .length;
+                final typingCount = classStudents
+                    .where((s) => s.status == StudentStatus.typing)
+                    .length;
+                final examCount = classStudents
+                    .where((s) => s.status == StudentStatus.exam)
+                    .length;
+                final offlineCount =
+                    _classTotalCount - onlineCount - typingCount - examCount;
 
-              return Wrap(
-                spacing: 4,
-                runSpacing: 4,
-                children: [
-                  _buildStatusChip(
-                    '在线: $onlineCount',
-                    Colors.green,
-                  ),
-                  _buildStatusChip(
-                    '离线: ${offlineCount >= 0 ? offlineCount : 0}',
-                    Colors.grey,
-                  ),
-                  _buildStatusChip(
-                    '打字: $typingCount',
-                    Colors.blue,
-                  ),
-                  _buildStatusChip(
-                    '小测: $examCount',
-                    Colors.orange,
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-        const SizedBox(width: 12),
-        // 题库选择
-        _buildLabel('题库'),
-        const SizedBox(width: 4),
-        Flexible(
-          flex: 2,
-          child: _buildBankSelector(),
-        ),
-        const SizedBox(width: 12),
-        // 同步按钮
-        ElevatedButton.icon(
-          onPressed: _syncToStudents,
-          icon: const Icon(Icons.sync, size: 16),
-          label: const Text('同步'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.successGreen,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
+                return Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: [
+                    _buildStatusChip(
+                      '在线: $onlineCount',
+                      Colors.green,
+                    ),
+                    _buildStatusChip(
+                      '离线: ${offlineCount >= 0 ? offlineCount : 0}',
+                      Colors.grey,
+                    ),
+                    _buildStatusChip(
+                      '打字: $typingCount',
+                      Colors.blue,
+                    ),
+                    _buildStatusChip(
+                      '小测: $examCount',
+                      Colors.orange,
+                    ),
+                  ],
+                );
+              },
             ),
           ),
-        ),
-        const SizedBox(width: 8),
-        // 刷新按钮
-        ElevatedButton.icon(
-          onPressed: _loadData,
-          icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('刷新'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.primaryBlue,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
+          const SizedBox(width: 12),
+          // 题库选择
+          _buildLabel('题库'),
+          const SizedBox(width: 4),
+          Flexible(
+            flex: 2,
+            child: _buildBankSelector(),
+          ),
+          const SizedBox(width: 12),
+          // 同步按钮
+          ElevatedButton.icon(
+            onPressed: _syncToStudents,
+            icon: const Icon(Icons.sync, size: 16),
+            label: const Text('同步'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.successGreen,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
           ),
-        ),
-      ],
+          const SizedBox(width: 8),
+          // 刷新按钮
+          ElevatedButton.icon(
+            onPressed: _loadData,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('刷新'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryBlue,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   /// 窄屏工具栏布局（自动换行）
   Widget _buildNarrowToolbar() {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        // 年级选择
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildLabel('年级'),
-            const SizedBox(width: 4),
-            SizedBox(
-              width: 80,
-              child: _buildSelector(
-                hint: '年级',
-                value: _selectedGrade,
-                items: _grades,
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _selectedGrade = value;
-                    });
-                    _saveClassSelection();
-                    // 不再自动设置服务器活跃班级，仅在点击同步按钮时生效
-                  }
-                },
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          // 年级选择
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildLabel('年级'),
+              const SizedBox(width: 4),
+              SizedBox(
+                width: 80,
+                child: _buildSelector(
+                  hint: '年级',
+                  value: _selectedGrade,
+                  items: _grades,
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _selectedGrade = value;
+                      });
+                      _saveClassSelection();
+                    }
+                  },
+                ),
               ),
-            ),
-          ],
-        ),
-        // 班级选择
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildLabel('班级'),
-            const SizedBox(width: 4),
-            SizedBox(
-              width: 80,
-              child: _buildSelector(
-                hint: '班级',
-                value: _selectedClass,
-                items: _classes,
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _selectedClass = value;
-                    });
-                    _saveClassSelection();
-                    // 不再自动设置服务器活跃班级，仅在点击同步按钮时生效
-                  }
-                },
+            ],
+          ),
+          // 班级选择
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildLabel('班级'),
+              const SizedBox(width: 4),
+              SizedBox(
+                width: 80,
+                child: _buildSelector(
+                  hint: '班级',
+                  value: _selectedClass,
+                  items: _classes,
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _selectedClass = value;
+                      });
+                      _saveClassSelection();
+                    }
+                  },
+                ),
               ),
-            ),
-          ],
-        ),
-        // 学生状态统计
-        Consumer<StudentStatusProvider>(
-          builder: (context, provider, _) {
-            // 计算当前班级的在线、打字、小测人数
-            final classLabel = '$_selectedGrade$_selectedClass';
-            final classStudents = provider.getStudentsByClass(classLabel);
-            final onlineCount = classStudents
-                .where((s) =>
-                    s.isOnline &&
-                    s.status != StudentStatus.typing &&
-                    s.status != StudentStatus.exam)
-                .length;
-            final typingCount = classStudents
-                .where((s) => s.status == StudentStatus.typing)
-                .length;
-            final examCount = classStudents
-                .where((s) => s.status == StudentStatus.exam)
-                .length;
-            // 离线人数 = 班级总人数 - 在线 - 打字 - 小测
-            final offlineCount =
-                _classTotalCount - onlineCount - typingCount - examCount;
-
-            return Wrap(
-              spacing: 4,
-              runSpacing: 4,
-              children: [
-                _buildStatusChip(
-                  '在线: $onlineCount',
-                  Colors.green,
-                ),
-                _buildStatusChip(
-                  '离线: ${offlineCount >= 0 ? offlineCount : 0}',
-                  Colors.grey,
-                ),
-                _buildStatusChip(
-                  '打字: $typingCount',
-                  Colors.blue,
-                ),
-                _buildStatusChip(
-                  '小测: $examCount',
-                  Colors.orange,
-                ),
-              ],
-            );
-          },
-        ),
-        // 题库选择
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildLabel('题库'),
-            const SizedBox(width: 4),
-            SizedBox(
-              width: 100,
-              child: _buildBankSelector(),
-            ),
-          ],
-        ),
+            ],
+          ),
+          // 题库选择
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildLabel('题库'),
+              const SizedBox(width: 4),
+              SizedBox(
+                width: 100,
+                child: _buildBankSelector(),
+              ),
+            ],
+          ),
         // 同步按钮
         ElevatedButton.icon(
           onPressed: _syncToStudents,
@@ -598,6 +566,7 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
         ),
       ],
+      ),
     );
   }
 
@@ -706,8 +675,18 @@ class _DashboardPageState extends State<DashboardPage> {
               });
               // 持久化题库选择到 JSON 文件
               QuestionBankConfigService.setSelectedBank(value);
-              // 自动同步题库到学生端
-              _syncBankToStudents(value);
+              // 同步题库到学生端
+              _syncBankToStudents(value).then((result) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(result ?? '同步成功'),
+                      backgroundColor: result == '同步成功' ? Colors.green : Colors.red,
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                }
+              });
             }
           },
         ),
@@ -717,6 +696,8 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Widget _buildStudentCards() {
     final classLabel = '$_selectedGrade$_selectedClass';
-    return StudentStatusWidget(classFilter: classLabel);
+    return StudentStatusWidget(
+      classFilter: classLabel,
+    );
   }
 }

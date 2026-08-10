@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
 import '../../../theme/app_theme.dart';
 import '../../../services/image_service.dart';
@@ -94,6 +95,12 @@ mixin MatchingQuestionMixin on State {
     }
 
     final questionScore = int.tryParse(scoreController.text) ?? 5;
+    // 方案B：题目总分由 items 分值累加得出
+    // 每个 item 均分总分，确保累加 = questionScore
+    final itemScore = itemCount > 0
+        ? (questionScore ~/ itemCount)
+        : 5;
+    final scoreRemainder = itemCount > 0 ? questionScore % itemCount : 0;
 
     final items = <MatchingItem>[];
     for (int i = 0; i < itemCount; i++) {
@@ -128,7 +135,7 @@ mixin MatchingQuestionMixin on State {
           rightText: ctrl.rightController.text,
           leftImage: savedLeftImage,
           rightImage: savedRightImage,
-          score: questionScore,
+          score: itemScore + (i < scoreRemainder ? 1 : 0),
         ));
       }
     }
@@ -416,7 +423,7 @@ mixin MatchingQuestionMixin on State {
     if (path == null) return;
 
     String fullPath = path;
-    if (!path.startsWith('C:') && !path.startsWith('D:')) {
+    if (!p.isAbsolute(path)) {
       fullPath = ImageService.getImageFullPath(path);
     }
 
@@ -467,6 +474,7 @@ mixin MatchingQuestionMixin on State {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -657,7 +665,11 @@ mixin MatchingQuestionMixin on State {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(8),
-      child: Row(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          width: 760,
+          child: Row(
         children: [
           Container(
             width: 28,
@@ -832,6 +844,8 @@ mixin MatchingQuestionMixin on State {
           ),
         ],
       ),
+        ),
+      ),
     );
   }
 
@@ -917,6 +931,7 @@ mixin MatchingQuestionMixin on State {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

@@ -22,6 +22,9 @@ class ExamModel {
   });
 
   factory ExamModel.fromJson(Map<String, dynamic> json) {
+    int? parseInt(dynamic value) => value is num
+        ? value.toInt()
+        : int.tryParse(value?.toString() ?? '');
     return ExamModel(
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
@@ -29,8 +32,8 @@ class ExamModel {
       examDate: json['exam_date'] != null
           ? DateTime.tryParse(json['exam_date'].toString())
           : null,
-      duration: json['duration'] as int?,
-      totalScore: json['total_score'] as int?,
+      duration: parseInt(json['duration']),
+      totalScore: parseInt(json['total_score']),
       status: json['status']?.toString(),
       createdAt: json['created_at'] != null
           ? DateTime.tryParse(json['created_at'].toString())
