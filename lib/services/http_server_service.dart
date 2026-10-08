@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart';
@@ -118,6 +119,111 @@ class HttpServerService {
 
   String get pointsExchangeConfigPath =>
       path.join(_informationRoot, 'manage', 'points_exchange.json');
+
+  // ============ 在线升级配置 ============
+
+  /// 全局在线升级开关（教师端学生管理页面控制）
+  bool _onlineUpdateEnabled = false;
+
+  bool get onlineUpdateEnabled => _onlineUpdateEnabled;
+
+  /// 目标版本号（教师端设置，用于和学生端当前版本比较）
+  String _targetVersion = '1.0.0';
+
+  String get targetVersion => _targetVersion;
+
+  /// 设置目标版本号（持久化到 online_update_config.json，重启后仍生效）
+  Future<bool> setTargetVersion(String version) async {
+    _targetVersion = version;
+    return _saveOnlineUpdateEnabled();
+  }
+
+  String get _onlineUpdateConfigPath =>
+      path.join(_informationRoot, 'manage', 'online_update_config.json');
+
+  /// 加载在线升级开关配置
+  Future<void> _loadOnlineUpdateConfig() async {
+    try {
+      final file = File(_onlineUpdateConfigPath);
+      if (await file.exists()) {
+        final content = await file.readAsString();
+        final data = json.decode(content) as Map<String, dynamic>;
+        _onlineUpdateEnabled = data['enabled'] as bool? ?? false;
+        _targetVersion = data['target_version'] as String? ?? '1.0.0';
+        print('已从本地加载在线升级配置: enabled=$_onlineUpdateEnabled, target_version=$_targetVersion');
+      } else {
+        await _saveOnlineUpdateEnabled();
+        print('在线升级配置文件不存在，已创建默认配置');
+      }
+    } catch (e) {
+      print('加载在线升级配置失败: $e');
+    }
+  }
+
+  /// 设置全局在线升级开关（持久化）
+  Future<bool> setOnlineUpdateEnabled(bool enabled) async {
+    _onlineUpdateEnabled = enabled;
+    return _saveOnlineUpdateEnabled();
+  }
+
+  /// 保存在线升级配置（开关 + 目标版本号）
+  Future<bool> _saveOnlineUpdateEnabled() async {
+    try {
+      final manageDir = Directory(path.join(_informationRoot, 'manage'));
+      if (!await manageDir.exists()) {
+        await manageDir.create(recursive: true);
+      }
+      final file = File(_onlineUpdateConfigPath);
+      final data = {
+        'enabled': _onlineUpdateEnabled,
+        'target_version': _targetVersion, // 新增：目标版本号
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      final jsonString = const JsonEncoder.withIndent('  ').convert(data);
+      final tempFile = File('${file.path}.tmp');
+      await tempFile.writeAsString(jsonString, flush: true);
+      json.decode(await tempFile.readAsString());
+      await tempFile.rename(file.path);
+      print('已保存在线升级配置: enabled=$_onlineUpdateEnabled, target_version=$_targetVersion');
+      return true;
+    } catch (e) {
+      print('保存在线升级配置失败: $e');
+      return false;
+    }
+  }
+
+  /// 安装包 MD5 缓存（key = 路径|大小|修改时间），避免每次 /check 都重算大文件哈希
+  String? _packageMd5CacheKey;
+  String? _packageMd5CacheValue;
+
+  /// 计算安装包 MD5（带缓存）；文件不存在或出错返回空字符串
+  Future<String> _getPackageMd5(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) return '';
+      final stat = await file.stat();
+      final cacheKey =
+          '$filePath|${stat.size}|${stat.modified.millisecondsSinceEpoch}';
+      if (_packageMd5CacheKey == cacheKey && _packageMd5CacheValue != null) {
+        return _packageMd5CacheValue!;
+      }
+
+      final output = _Md5Sink();
+      final input = md5.startChunkedConversion(output);
+      await for (final chunk in file.openRead()) {
+        input.add(chunk);
+      }
+      input.close();
+
+      final digest = output.value?.toString() ?? '';
+      _packageMd5CacheKey = cacheKey;
+      _packageMd5CacheValue = digest;
+      return digest;
+    } catch (e) {
+      debugPrint('计算安装包MD5失败: $e');
+      return '';
+    }
+  }
 
   Future<T> _withPointsExchangeLock<T>(Future<T> Function() action) async {
     final previous = _pointsExchangeLock;
@@ -806,14 +912,35 @@ class HttpServerService {
   }
 
   Future<Map<String, dynamic>?> findStudentByDevice(String computerName, String ip) async {
+    // 1. 优先在活跃班级中按「电脑名 + IP」精确匹配
     if (_activeClass.isNotEmpty) {
       // 使用异步版本，缓存为空时会自动从磁盘文件加载
       final students = await loadClassStudentsAsync(_activeClass);
       for (final s in students) {
         if (s['computer_name'] == computerName && s['ip'] == ip) return s;
       }
-      return null;
     }
+
+    // 2. 活跃班级未命中时，回退到所有班级精确匹配
+    //    （班级升级等场景下活跃班级可能一时未更新，避免自动登录直接失效）
+    for (final classId in getAllClassIds()) {
+      if (classId == _activeClass) continue;
+      final students = await loadClassStudentsAsync(classId);
+      for (final s in students) {
+        if (s['computer_name'] == computerName && s['ip'] == ip) return s;
+      }
+    }
+
+    // 3. 仍未命中时，放宽为按「电脑名」匹配，兼容 DHCP 导致 IP 变化的情况
+    if (computerName.isNotEmpty) {
+      for (final classId in getAllClassIds()) {
+        final students = await loadClassStudentsAsync(classId);
+        for (final s in students) {
+          if (s['computer_name'] == computerName) return s;
+        }
+      }
+    }
+
     return null;
   }
 
@@ -847,6 +974,8 @@ class HttpServerService {
 
     await _loadTypingConfig();
     await _loadPointsExchangeConfig();
+    // 【在线升级】加载全局开关配置
+    await _loadOnlineUpdateConfig();
 
     // 【修复】启动时预填充 _studentCache，避免登录时找不到已有学生
     await _preloadStudentCache();
@@ -1982,6 +2111,168 @@ class HttpServerService {
       });
     });
 
+    // ============ 在线升级 API ============
+
+    /// 获取在线升级版本信息
+    router.get('/api/student-update/version', (Request request) async {
+      final versionFile = File(path.join(AppPath.studentOnlineUpdateDir, 'version.json'));
+      if (!await versionFile.exists()) {
+        return jsonResponse({'success': false, 'error': '暂无更新版本信息'}, status: 404);
+      }
+      try {
+        final content = await versionFile.readAsString();
+        final data = json.decode(content) as Map<String, dynamic>;
+        return jsonResponse({'success': true, 'data': data});
+      } catch (e) {
+        return jsonResponse({'success': false, 'error': '读取版本信息失败: $e'}, status: 500);
+      }
+    });
+
+    /// 检查学生端是否有更新可用
+    /// 参数: student_id, current_version
+    router.get('/api/student-update/check', (Request request) async {
+      final currentVersion = request.url.queryParameters['current_version'] ?? '';
+
+      if (currentVersion.isEmpty) {
+        return jsonResponse({'success': false, 'error': '缺少current_version'}, status: 400);
+      }
+
+      // 1. 教师端开关关闭 → 不升级
+      if (!_onlineUpdateEnabled) {
+        return jsonResponse({
+          'success': true,
+          'update_available': false,
+          'online_update_enabled': false,
+          'target_version': _targetVersion,
+          'version': null,
+        });
+      }
+
+      // 2. 获取下载文件名（从 version.json 读取）
+      final versionFile = File(path.join(AppPath.studentOnlineUpdateDir, 'version.json'));
+      Map<String, dynamic> versionData = {};
+      String? fileName;
+      if (await versionFile.exists()) {
+        try {
+          final content = await versionFile.readAsString();
+          versionData = json.decode(content) as Map<String, dynamic>;
+          fileName = versionData['file_name'] as String? ?? '';
+        } catch (_) {}
+      }
+
+      // 3. 比较版本：只有目标版本"高于"学生端当前版本才提示更新（避免降级/版本抖动）
+      final targetVersion = _targetVersion.trim();
+      final fileNameTrimmed = (fileName ?? '').trim();
+
+      // 安装包信息：version.json 未填时按实际文件补齐（学生端用于下载完整性校验）
+      var fileSize = (versionData['file_size'] as num?)?.toInt() ?? 0;
+      var md5Hex = (versionData['md5'] ?? '').toString().trim().toLowerCase();
+      if (fileNameTrimmed.isNotEmpty) {
+        final pkgPath =
+            path.join(AppPath.studentOnlineUpdateDir, fileNameTrimmed);
+        if (fileSize <= 0) {
+          try {
+            final pkgFile = File(pkgPath);
+            if (await pkgFile.exists()) fileSize = await pkgFile.length();
+          } catch (_) {}
+        }
+        if (md5Hex.isEmpty) {
+          md5Hex = await _getPackageMd5(pkgPath);
+        }
+      }
+
+      // 强制更新：version.json 显式打开，或学生端当前版本低于 min_version
+      final minVersion = (versionData['min_version'] ?? '').toString().trim();
+      final forceUpdate = versionData['force_update'] == true ||
+          (minVersion.isNotEmpty &&
+              _compareVersions(currentVersion, minVersion) < 0);
+
+      // 没有安装包文件名时一律不提示更新（否则学生端会静默失败，且教师端无从察觉）
+      final updateAvailable = _onlineUpdateEnabled &&
+          targetVersion.isNotEmpty &&
+          fileNameTrimmed.isNotEmpty &&
+          _compareVersions(targetVersion, currentVersion) > 0;
+
+      return jsonResponse({
+        'success': true,
+        'update_available': updateAvailable,
+        'online_update_enabled': _onlineUpdateEnabled,
+        'target_version': targetVersion,
+        'version': {
+          ...versionData,
+          'version': targetVersion, // 目标版本号以教师端设置为准
+          'file_name': fileNameTrimmed,
+          'file_size': fileSize,
+          'md5': md5Hex,
+          'min_version': minVersion,
+          'force_update': forceUpdate,
+        },
+      });
+    });
+
+    /// 下载更新文件（支持断点续传）
+    router.get('/api/student-update/download/<filename>', (Request request, String filename) async {
+      final decodedFilename = Uri.decodeComponent(filename);
+      // 路径穿越保护
+      if (decodedFilename.contains('..')) {
+        return Response.forbidden('访问被拒绝');
+      }
+      final baseDir = path.normalize(AppPath.studentOnlineUpdateDir);
+      final absolutePath = path.normalize(path.join(baseDir, decodedFilename));
+      if (!absolutePath.startsWith(baseDir)) {
+        return Response.forbidden('访问被拒绝');
+      }
+      final file = File(absolutePath);
+      if (!await file.exists()) {
+        return jsonResponse({'success': false, 'error': '文件不存在'}, status: 404);
+      }
+
+      final fileLength = await file.length();
+      String contentType = 'application/octet-stream';
+
+      // 处理 Range 请求（断点续传）
+      final rangeHeader = request.headers['range'];
+      if (rangeHeader != null && rangeHeader.startsWith('bytes=')) {
+        final range = rangeHeader.substring(6).trim();
+        final rangeParts = range.split('-');
+        if (rangeParts.length == 2) {
+          final start = int.tryParse(rangeParts[0]) ?? 0;
+          final end = rangeParts[1].isNotEmpty
+              ? (int.tryParse(rangeParts[1]) ?? fileLength - 1)
+              : fileLength - 1;
+
+          if (start >= 0 && start < fileLength && end >= start && end < fileLength) {
+            final chunkLength = end - start + 1;
+            final randomAccessFile = await file.open(mode: FileMode.read);
+            try {
+              await randomAccessFile.setPosition(start);
+              final chunk = await randomAccessFile.read(chunkLength);
+              return Response(206, body: chunk, headers: {
+                'Content-Type': contentType,
+                'Content-Length': chunkLength.toString(),
+                'Content-Range': 'bytes $start-$end/$fileLength',
+                'Accept-Ranges': 'bytes',
+                'Content-Disposition': 'attachment; filename="$decodedFilename"',
+                ..._corsHeaders,
+              });
+            } finally {
+              await randomAccessFile.close();
+            }
+          }
+        }
+      }
+
+      // 完整文件下载
+      final bytes = await file.readAsBytes();
+      return Response.ok(bytes, headers: {
+        'Content-Type': contentType,
+        'Content-Length': fileLength.toString(),
+        'Accept-Ranges': 'bytes',
+        'Content-Disposition': 'attachment; filename="$decodedFilename"',
+        ..._corsHeaders,
+      });
+    });
+
     // 静态文件服务
     final filesMiddleware = createMiddleware(
       requestHandler: (Request request) async {
@@ -2096,6 +2387,21 @@ class HttpServerService {
     print('活跃班级已设置: $className');
   }
 
+  /// 语义化版本比较
+  /// 返回: 1 表示 v1 > v2, -1 表示 v1 < v2, 0 表示相等
+  int _compareVersions(String v1, String v2) {
+    final parts1 = v1.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+    final parts2 = v2.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+    final maxLen = parts1.length > parts2.length ? parts1.length : parts2.length;
+    while (parts1.length < maxLen) parts1.add(0);
+    while (parts2.length < maxLen) parts2.add(0);
+    for (int i = 0; i < maxLen; i++) {
+      if (parts1[i] > parts2[i]) return 1;
+      if (parts1[i] < parts2[i]) return -1;
+    }
+    return 0;
+  }
+
   /// 从题库文件读取考试时间限制
   Future<int> _loadExamTimeLimitFromBank(String bankName) async {
     try {
@@ -2163,3 +2469,17 @@ class HttpServerService {
     }
   }
 }
+
+/// 收集 MD5 分块计算结果（配合 md5.startChunkedConversion，避免整包读进内存）
+class _Md5Sink implements Sink<Digest> {
+  Digest? value;
+
+  @override
+  void add(Digest data) {
+    value = data;
+  }
+
+  @override
+  void close() {}
+}
+

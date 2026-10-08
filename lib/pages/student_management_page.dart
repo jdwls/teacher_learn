@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 import '../theme/app_theme.dart';
 import '../services/http_server_service.dart';
 import '../utils/app_path.dart';
@@ -498,8 +500,78 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     );
   }
 
+  /// 迁移班级目录下除 use_list.json 外的数据文件
+  /// （小测成绩表 / 中英文打字成绩表 / 错题记录 / 积分增加详细表 及其 .bak 备份）
+  /// 目标文件不存在则直接复制；已存在则合并 records 数组并按提交标识去重。
+  Future<void> _migrateClassDataFiles(
+      String oldClassId, String newClassId) async {
+    final oldDir = Directory('${AppPath.informationDir}/$oldClassId');
+    if (!oldDir.existsSync()) return;
+
+    final newDir = Directory('${AppPath.informationDir}/$newClassId');
+    if (!newDir.existsSync()) {
+      newDir.createSync(recursive: true);
+    }
+
+    for (final entity in oldDir.listSync()) {
+      if (entity is! File) continue;
+      final name = entity.path.split(Platform.pathSeparator).last;
+      // use_list.json 由 replaceClassStudents 统一重写，跳过
+      if (name == 'use_list.json') continue;
+
+      try {
+        final target = File('${newDir.path}${Platform.pathSeparator}$name');
+        if (!target.existsSync()) {
+          await entity.copy(target.path);
+          continue;
+        }
+
+        // 目标已存在：合并 records（结构不匹配时保守跳过，不覆盖已有数据）
+        final oldData = json.decode(await entity.readAsString());
+        final newData = json.decode(await target.readAsString());
+        if (oldData is Map &&
+            newData is Map &&
+            oldData['records'] is List &&
+            newData['records'] is List) {
+          final merged = <Map<String, dynamic>>[];
+          final seen = <String>{};
+          for (final r in (newData['records'] as List).whereType<Map>()) {
+            final record = Map<String, dynamic>.from(r);
+            merged.add(record);
+            final key =
+                (record['submission_id'] ?? record['submit_time'] ?? '')
+                    .toString();
+            if (key.isNotEmpty) seen.add(key);
+          }
+          for (final r in (oldData['records'] as List).whereType<Map>()) {
+            final record = Map<String, dynamic>.from(r);
+            final key =
+                (record['submission_id'] ?? record['submit_time'] ?? '')
+                    .toString();
+            if (key.isNotEmpty && seen.contains(key)) continue;
+            merged.add(record);
+            if (key.isNotEmpty) seen.add(key);
+          }
+          newData['records'] = merged;
+          final tmp = File('${target.path}.migrate.tmp');
+          await tmp.writeAsString(
+              const JsonEncoder.withIndent('  ').convert(newData),
+              flush: true);
+          json.decode(await tmp.readAsString());
+          await tmp.rename(target.path);
+        } else {
+          print('班级数据迁移：跳过合并（结构不匹配）$name');
+        }
+      } catch (e) {
+        print('班级数据迁移失败 $name: $e');
+      }
+    }
+  }
+
   /// 执行班级升级
   Future<void> _upgradeClass(String oldClassId, String newClassId) async {
+    // 提前捕获 Provider，避免 await 之后再使用 context
+    final authProvider = context.read<AuthProvider>();
     try {
       // 检查目标班级是否已存在
       final newClassDir = Directory('${AppPath.informationDir}/$newClassId');
@@ -523,6 +595,14 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     final copiedStudents = students
         .map((s) => Map<String, dynamic>.from(s)..['class_id'] = newClassId)
         .toList();
+
+    // 【数据迁移】先把旧班级目录下的成绩/错题/积分等文件搬到新班级目录，
+    // 再写名单、删旧目录，避免升级时丢失历史数据。
+    try {
+      await _migrateClassDataFiles(oldClassId, newClassId);
+    } catch (e) {
+      print('班级数据迁移异常: $e');
+    }
 
     // 先完整写入并确认新班级文件成功，再删除旧班级。
     if (!await _httpService.replaceClassStudents(newClassId, copiedStudents)) {
@@ -552,6 +632,16 @@ class _StudentManagementPageState extends State<StudentManagementPage>
       // 清除缓存
       _httpService.clearStudentCache(oldClassId);
       _httpService.clearStudentCache(newClassId);
+
+      // 若升级的是当前班级，同步更新"当前班级"的两个来源：
+      // 1) 服务端活跃班级（登录/自动登录只在活跃班级内查找学生）
+      // 2) 首页保存的班级选择（否则回到首页后同步按钮会把已删除的旧班级重新设为活跃班级）
+      final currentSelected = authProvider.selectedClassLabel ?? '初一01班';
+      if (_httpService.activeClass == oldClassId ||
+          currentSelected == oldClassId) {
+        _httpService.setActiveClass(newClassId);
+        await authProvider.setSelectedClass(newClassId);
+      }
 
       // 刷新界面
       setState(() {

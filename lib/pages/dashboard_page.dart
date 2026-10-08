@@ -184,17 +184,106 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  /// 设置活跃班级到HTTP服务器
-  void _setActiveClass() async {
+  /// 同步到学生端
+  /// - 如果当前班级有学生已登录（在线），只同步题库，不修改学生数据
+  /// - 如果当前班级没有学生在线，同步班级和题库（供下次登录使用）
+  void _syncToStudents() async {
+    if (_isSyncing) return;
+    if (_selectedBank == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('请先选择一个题库'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    setState(() => _isSyncing = true);
+
+    // 检查当前班级是否有学生在线
     final classLabel = '$_selectedGrade$_selectedClass';
+    final studentStatusProvider = context.read<StudentStatusProvider>();
+    final classStudents = studentStatusProvider.getStudentsByClass(classLabel);
+    final hasOnlineStudents = classStudents.any((s) => s.isOnline);
+
     try {
-      await http.post(
-        Uri.parse('http://localhost:20020/api/active-class'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({'class_id': classLabel}),
-      ).timeout(const Duration(seconds: 10));
+      if (hasOnlineStudents) {
+        // 【情况A】有学生在线，只同步题库
+        // 不修改班级配置，避免打断正在答题的学生
+        final response = await http.post(
+          Uri.parse('http://localhost:20020/api/active-bank'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'bank': _selectedBank}),
+        ).timeout(const Duration(seconds: 10));
+
+        if (!_isResponseOk(response)) {
+          throw Exception('同步题库失败（HTTP ${response.statusCode}）');
+        }
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                '已同步题库 "$_selectedBank" 到在线学生（有学生在线，班级配置未变更）'),
+            backgroundColor: AppTheme.successGreen,
+          ),
+        );
+      } else {
+        // 【情况B】没有学生在线，同步班级和题库
+        // 这里更新的是服务器的配置，不是学生数据文件
+        final classResponse = await http.post(
+          Uri.parse('http://localhost:20020/api/active-class'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'class_id': classLabel}),
+        ).timeout(const Duration(seconds: 10));
+        if (!_isResponseOk(classResponse)) {
+          throw Exception('设置活跃班级失败（HTTP ${classResponse.statusCode}）');
+        }
+
+        final response = await http.post(
+          Uri.parse('http://localhost:20020/api/active-bank'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'bank': _selectedBank}),
+        ).timeout(const Duration(seconds: 10));
+        if (!_isResponseOk(response)) {
+          throw Exception('同步题库失败（HTTP ${response.statusCode}）');
+        }
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content:
+                Text('已同步班级 "$classLabel" 和题库 "$_selectedBank"（学生登录后将使用此配置）'),
+            backgroundColor: AppTheme.successGreen,
+          ),
+        );
+      }
     } catch (e) {
-      // 忽略错误
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('同步失败: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      // 无论成功、失败还是提前返回，都要复位同步状态，避免按钮永久卡在"同步中"
+      if (mounted) {
+        setState(() => _isSyncing = false);
+      } else {
+        _isSyncing = false;
+      }
+    }
+  }
+
+  /// 校验服务器响应：状态码 200 且 body 中 success == true
+  bool _isResponseOk(http.Response response) {
+    if (response.statusCode != 200) return false;
+    try {
+      final data = json.decode(response.body);
+      return data is Map && data['success'] == true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -211,93 +300,6 @@ class _DashboardPageState extends State<DashboardPage> {
     // 从 ServerService 内存中刷新学生状态
     final studentStatusProvider = context.read<StudentStatusProvider>();
     studentStatusProvider.reloadFromServer();
-  }
-
-  /// 同步到学生端
-  /// - 如果当前班级有学生已登录（在线），只同步题库，不修改学生数据
-  /// - 如果当前班级没有学生在线，同步班级和题库（供下次登录使用）
-  void _syncToStudents() async {
-    if (_isSyncing) return;
-    if (_selectedBank == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('请先选择一个题库'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-    _isSyncing = true;
-
-    // 检查当前班级是否有学生在线
-    final classLabel = '$_selectedGrade$_selectedClass';
-    final studentStatusProvider = context.read<StudentStatusProvider>();
-    final classStudents = studentStatusProvider.getStudentsByClass(classLabel);
-    final hasOnlineStudents = classStudents.any((s) => s.isOnline);
-
-    try {
-      if (hasOnlineStudents) {
-        // 【情况A】有学生在线，只同步题库
-        // 注意：这里只更新题库配置，不触碰学生数据文件
-        final response = await http.post(
-          Uri.parse('http://localhost:20020/api/active-bank'),
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode({'bank': _selectedBank}),
-        ).timeout(const Duration(seconds: 10));
-
-        if (response.statusCode == 200) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('已同步题库 "$_selectedBank" 到在线学生'),
-              backgroundColor: AppTheme.successGreen,
-            ),
-          );
-        }
-      } else {
-        // 【情况B】没有学生在线，同步班级和题库
-        // 这里更新的是服务器的配置，不是学生数据文件
-        final classResponse = await http.post(
-          Uri.parse('http://localhost:20020/api/active-class'),
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode({'class_id': classLabel}),
-        ).timeout(const Duration(seconds: 10));
-        if (classResponse.statusCode == 200) {
-          final result = json.decode(classResponse.body);
-          if (result is! Map || result['success'] != true) {
-            throw Exception('设置活跃班级失败');
-          }
-        } else {
-          throw Exception('设置活跃班级失败: HTTP ${classResponse.statusCode}');
-        }
-
-        final response = await http.post(
-          Uri.parse('http://localhost:20020/api/active-bank'),
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode({'bank': _selectedBank}),
-        ).timeout(const Duration(seconds: 10));
-
-        if (response.statusCode == 200) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content:
-                  Text('已同步班级 "$classLabel" 和题库 "$_selectedBank"（学生登录后将使用此配置）'),
-              backgroundColor: AppTheme.successGreen,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('同步失败: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-    _isSyncing = false;
   }
 
   @override
@@ -436,9 +438,18 @@ class _DashboardPageState extends State<DashboardPage> {
           const SizedBox(width: 12),
           // 同步按钮
           ElevatedButton.icon(
-            onPressed: _syncToStudents,
-            icon: const Icon(Icons.sync, size: 16),
-            label: const Text('同步'),
+            onPressed: _isSyncing ? null : _syncToStudents,
+            icon: _isSyncing
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.sync, size: 16),
+            label: Text(_isSyncing ? '同步中…' : '同步'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.successGreen,
               foregroundColor: Colors.white,
@@ -539,9 +550,18 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
         // 同步按钮
         ElevatedButton.icon(
-          onPressed: _syncToStudents,
-          icon: const Icon(Icons.sync, size: 16),
-          label: const Text('同步'),
+          onPressed: _isSyncing ? null : _syncToStudents,
+          icon: _isSyncing
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Icon(Icons.sync, size: 16),
+          label: Text(_isSyncing ? '同步中…' : '同步'),
           style: ElevatedButton.styleFrom(
             backgroundColor: AppTheme.successGreen,
             foregroundColor: Colors.white,

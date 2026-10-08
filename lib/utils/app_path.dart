@@ -51,4 +51,29 @@ class AppPath {
 
   /// 【P21修复】题库目录路径 - 使用 path.join 避免跨平台路径问题
   static String get questionBankDir => path.join(projectRoot, '题库');
+
+  /// 学生端在线升级文件目录
+  ///
+  /// 解析顺序（找到即用，都没有则用第一候选自动创建）：
+  ///   1. 应用根目录下的 student_online_update     —— 生产部署（与 Teacher.exe 同级）
+  ///   2. 应用根目录上一层的同名目录              —— 开发模式（仓库根，与 student/ teacher/ 平行）
+  static String? _studentOnlineUpdateDir;
+
+  static String get studentOnlineUpdateDir {
+    if (_studentOnlineUpdateDir != null) return _studentOnlineUpdateDir!;
+    final primary = path.join(projectRoot, 'student_online_update');
+    final secondary = path.join(Directory(projectRoot).parent.path, 'student_online_update');
+    for (final dir in [primary, secondary]) {
+      if (Directory(dir).existsSync()) {
+        _studentOnlineUpdateDir = dir;
+        print('学生端升级包目录: $_studentOnlineUpdateDir');
+        return dir;
+      }
+    }
+    // 两处都不存在（如首次部署）：用主候选并自动创建
+    Directory(primary).createSync(recursive: true);
+    _studentOnlineUpdateDir = primary;
+    print('学生端升级包目录不存在，已自动创建: $primary');
+    return primary;
+  }
 }

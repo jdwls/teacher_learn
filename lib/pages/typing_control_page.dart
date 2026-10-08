@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../theme/app_theme.dart';
 import '../services/typing_article_service.dart';
+import '../services/http_server_service.dart';
+import '../utils/app_path.dart';
 
 /// 学生端控制页面
 class TypingControlPage extends StatefulWidget {
@@ -42,6 +45,10 @@ class _TypingControlPageState extends State<TypingControlPage>
   ];
   List<List<String>> _schedule = List.generate(8, (_) => List.filled(5, ''));
 
+  // 在线升级
+  bool _onlineUpdateEnabled = false;
+  final _targetVersionController = TextEditingController();
+
   final List<String> _classList = [
     for (var g in ['初一', '初二', '初三'])
       for (var c = 1; c <= 20; c++) '$g${c.toString().padLeft(2, '0')}班',
@@ -50,14 +57,17 @@ class _TypingControlPageState extends State<TypingControlPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _loadArticles();
     _loadSchedule();
+    _onlineUpdateEnabled = HttpServerService.instance.onlineUpdateEnabled;
+    _targetVersionController.text = HttpServerService.instance.targetVersion;
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _targetVersionController.dispose();
     super.dispose();
   }
 
@@ -252,6 +262,7 @@ class _TypingControlPageState extends State<TypingControlPage>
             tabs: const [
               Tab(text: '打字配置'),
               Tab(text: '课表管理'),
+              Tab(text: '在线升级'),
             ],
           ),
         ),
@@ -291,11 +302,175 @@ class _TypingControlPageState extends State<TypingControlPage>
                   ],
                 ),
               ),
+              // Tab 3: 在线升级
+              SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildOnlineUpdatePanel(),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
       ],
     );
+  }
+
+  // ==================== Tab 3: 在线升级 ====================
+
+  /// 在线升级面板（版本号 + 开始更新按钮）
+  Widget _buildOnlineUpdatePanel() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F7FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.primaryBlue.withAlpha(77)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.system_update, size: 20, color: AppTheme.primaryBlue),
+              const SizedBox(width: 12),
+              const Text('学生端在线升级',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              const Spacer(),
+              Switch(
+                value: _onlineUpdateEnabled,
+                onChanged: _toggleOnlineUpdate,
+                activeColor: AppTheme.primaryBlue,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              const Text('目标版本号:',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 160,
+                child: TextField(
+                  controller: _targetVersionController,
+                  decoration: const InputDecoration(
+                    hintText: '如 1.1.0',
+                    isDense: true,
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(8)),
+                    ),
+                  ),
+                  onChanged: (_) => _saveTargetVersion(),
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                onPressed: _onlineUpdateEnabled ? _startOnlineUpdate : null,
+                icon: const Icon(Icons.rocket_launch, size: 18),
+                label: const Text('开始更新'),
+                style: AppTheme.primaryButtonStyle,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+              '将新版安装包放入 student_online_update/ 目录，并在该目录 version.json 中填写 file_name（可选 md5 / force_update / min_version）',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        ],
+      ),
+    );
+  }
+
+  /// 切换在线升级开关
+  Future<void> _toggleOnlineUpdate(bool enabled) async {
+    setState(() {
+      _onlineUpdateEnabled = enabled;
+    });
+    await HttpServerService.instance.setOnlineUpdateEnabled(enabled);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(enabled ? '已开启学生端在线升级' : '已关闭学生端在线升级'),
+          backgroundColor: enabled ? Colors.green : Colors.orange,
+        ),
+      );
+    }
+  }
+
+  /// 保存目标版本号（持久化到配置，重启后仍生效）
+  Future<void> _saveTargetVersion() async {
+    final version = _targetVersionController.text.trim();
+    if (version.isEmpty) return;
+    await HttpServerService.instance.setTargetVersion(version);
+  }
+
+  /// 校验 student_online_update 目录下的版本信息与安装包是否就绪
+  /// 返回 null 表示就绪，否则返回错误提示文案
+  Future<String?> _validateOnlineUpdatePackage() async {
+    final dirPath = AppPath.studentOnlineUpdateDir;
+    final versionFile = File('$dirPath${Platform.pathSeparator}version.json');
+    if (!versionFile.existsSync()) {
+      return '未找到 student_online_update/version.json';
+    }
+    try {
+      final data =
+          json.decode(await versionFile.readAsString()) as Map<String, dynamic>;
+      final fileName = (data['file_name'] ?? '').toString().trim();
+      if (fileName.isEmpty) {
+        return 'version.json 里的 file_name 为空，请填写安装包文件名';
+      }
+      final pkgFile = File('$dirPath${Platform.pathSeparator}$fileName');
+      if (!pkgFile.existsSync()) {
+        return '安装包不存在: student_online_update/$fileName';
+      }
+      return null;
+    } catch (e) {
+      return '读取 version.json 失败: $e';
+    }
+  }
+
+  /// 开始更新
+  Future<void> _startOnlineUpdate() async {
+    final version = _targetVersionController.text.trim();
+    if (version.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先输入目标版本号'), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
+    // 发布前先确认安装包已就绪，否则学生端会静默什么都不做（且无从排查）
+    final packageError = await _validateOnlineUpdatePackage();
+    if (packageError != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(packageError), backgroundColor: Colors.red),
+        );
+      }
+      return;
+    }
+
+    // 先保存版本号到配置（持久化），再打开全局开关
+    await HttpServerService.instance.setTargetVersion(version);
+    await HttpServerService.instance.setOnlineUpdateEnabled(true);
+
+    if (mounted) {
+      setState(() {
+        _onlineUpdateEnabled = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已发布版本 $version，学生端将在下次启动时升级'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
   }
 
   Widget _buildScheduleTable() {

@@ -183,12 +183,15 @@
 
 | 技术 | 版本/说明 |
 |------|----------|
-| **Flutter** | SDK >=3.0.0 <4.0.0 |
-| **Dart** | 配合 Flutter SDK |
+| **Flutter / Dart** | Dart SDK >=3.0.0 <4.0.0（按项目 `pubspec.yaml` 约束） |
 | **Provider** | ^6.0.5（状态管理） |
-| **fl_chart** | ^0.66.0（图表库） |
+| **fl_chart** | ^0.66.0（统计图表） |
 | **window_manager** | ^0.3.7（窗口管理） |
-| **shelf** | ^1.4.1（HTTP 服务器） |
+| **shelf / shelf_router** | HTTP API 服务 |
+| **shared_preferences / path_provider** | 配置与应用数据目录支持 |
+| **file_picker** | 文件选择与导入 |
+| **crypto** | 在线升级文件 MD5 校验 |
+| **intl / uuid / path** | 日期格式化、标识生成与路径处理 |
 
 ### 状态管理
 
@@ -207,8 +210,8 @@
 
 | 服务 | 说明 |
 |------|------|
-| `HttpServerService` | HTTP API 服务（端口 20020） |
-| `ServerService` | Socket 服务（用于学生端通信） |
+| `HttpServerService` | HTTP API 服务（默认端口 20020） |
+| `ServerService` | 学生端 Socket 通信服务（默认端口 20021） |
 | `QuestionBankService` | 题库文件管理 |
 | `ImageService` | 图片上传与管理 |
 | `TypingArticleService` | 打字文章管理 |
@@ -235,18 +238,15 @@ teacher/
 │   ├── theme/                    # 主题样式
 │   ├── utils/                    # 工具类
 │   └── widgets/                  # 公共组件
+├── test/                         # 自动化测试
 ├── assets/
 │   ├── images/                   # 图片资源
 │   └── icons/                    # 图标资源
-├── information/                  # 数据存储目录
-│   ├── 初一01班/                 # 班级数据
-│   │   ├── use_list.json         # 学生名单
-│   │   ├── 小测成绩表.json        # 小测成绩
-│   │   └── 错题记录.json          # 错题记录
-│   ├── manage/                   # 系统管理数据
-│   │   └── schedule.json         # 课表
+├── information/                  # 开发环境中的本地数据目录
+│   ├── 初一01班/                 # 班级学生、成绩与错题数据
+│   ├── manage/                   # 课表及系统管理数据
 │   └── type_articles/            # 打字文章
-├── 题库/                         # 题库目录
+├── 题库/                         # 开发环境中的题库目录
 │   ├── 2/                        # 题库文件夹
 │   │   └── 题库.json             # 题库数据
 │   └── ...                       # 其他题库
@@ -261,9 +261,9 @@ teacher/
 
 ### 环境要求
 
-- Flutter SDK 3.0+
-- Windows 操作系统
-- Dart SDK
+- Flutter SDK（Dart SDK 满足 `pubspec.yaml` 中 `>=3.0.0 <4.0.0` 的约束）
+- Windows 10/11；运行 Windows 桌面目标需安装并配置 Visual Studio 的 Desktop development with C++ 工作负载
+- Git（克隆项目时需要）
 
 ### 安装步骤
 
@@ -288,6 +288,8 @@ teacher/
    flutter build windows
    ```
 
+首次构建 Windows 桌面应用前，可运行 `flutter doctor -v` 检查 Flutter、Windows 桌面工具链是否就绪。应用启动时会尝试启动 HTTP 与 Socket 服务；若端口被占用或服务启动失败，桌面界面仍会打开，但学生端连接及同步功能可能不可用。
+
 ### 打包后的应用位置
 
 ```
@@ -300,7 +302,7 @@ build/windows/x64/runner/Release/
 
 ### 数据存储方式
 
-所有数据以 JSON 文件形式存储在本地 `information/` 目录下。
+班级、成绩、错题、课表、题库和打字文章等业务数据以 JSON 文件形式保存。开发环境的数据目录包括项目根目录下的 `information/` 和 `题库/`；实际运行时的读写位置由应用路径工具根据运行环境确定。发布后请备份应用数据目录，升级或迁移应用时不要只复制可执行文件。
 
 ### 班级数据结构
 
@@ -325,9 +327,9 @@ build/windows/x64/runner/Release/
 
 ## 🔌 API 服务
 
-### HTTP API（端口 20020）
+### HTTP API（默认端口 20020）
 
-应用启动时自动启动本地 HTTP API 服务：
+应用启动时自动尝试启动本地 HTTP API 服务，供学生端获取题库、班级及配置数据并提交登录、成绩等信息。以下为主要接口示例，完整接口以 `lib/services/http_server_service.dart` 中的路由定义为准：
 
 | API | 说明 |
 |-----|------|
@@ -338,13 +340,15 @@ build/windows/x64/runner/Release/
 | `GET /api/typing-config` | 获取打字配置 |
 | `POST /api/typing-config` | 保存打字配置 |
 
-### Socket 服务
+### Socket 服务（默认端口 20021）
 
-用于与学生端实时通信：
+用于与学生端建立实时通信：
 - 学生上线/下线通知
 - 实时状态同步
 - 打字进度监控
 - 小测状态同步
+
+HTTP 与 Socket 服务在应用启动时分别初始化。启动失败不会阻止教师端界面运行，但依赖这些服务的学生端联网功能将不可用。端口配置位于 `lib/config/app_config.dart`。
 
 ---
 

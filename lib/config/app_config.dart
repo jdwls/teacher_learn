@@ -84,4 +84,12 @@ class AppConfig {
 
   /// 学生状态：小测中
   static const String statusExam = 'exam';
+
+  // ============ 在线升级配置 ============
+
+  /// 学生端在线升级检查间隔（分钟）
+  static const int studentUpdateCheckIntervalMinutes = 30;
+
+  /// 学生端在线升级文件目录名
+  static const String studentOnlineUpdateDirName = 'student_online_update';
 }

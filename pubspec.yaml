@@ -37,6 +37,8 @@ dependencies:
   intl: ^0.18.1
   uuid: ^4.2.1
   path: ^1.8.0
+  # 哈希校验（在线升级安装包 MD5）
+  crypto: ^3.0.3
   
   
   # 窗口管理
