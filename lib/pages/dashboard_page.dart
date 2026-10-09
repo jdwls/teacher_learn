@@ -258,9 +258,16 @@ class _DashboardPageState extends State<DashboardPage> {
     userProvider.loadUsers();
     examProvider.loadExams();
 
-    // 从 ServerService 内存中刷新学生状态
+    // 点击刷新：重新读取当前班级的 use_list.json 学生列表并显示到表格
     final studentStatusProvider = context.read<StudentStatusProvider>();
+    studentStatusProvider.refresh(
+      '${AppPath.projectRoot}/information/$_selectedGrade$_selectedClass/use_list.json',
+    );
+    // 同时从 ServerService 内存刷新在线状态（会与上面读到的列表合并）
     studentStatusProvider.reloadFromServer();
+
+    // 重新读取班级名册（information/<班级>/use_list.json），更新班级总人数
+    _loadClassTotalCount('$_selectedGrade$_selectedClass');
   }
 
   @override

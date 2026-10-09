@@ -100,6 +100,8 @@ class StudentStatusInfo {
 
 class StudentStatusProvider extends ChangeNotifier {
   List<StudentStatusInfo> _students = [];
+  // 最近一次从 use_list.json 读到的班级名册（刷新按钮读取的结果缓存）
+  List<StudentStatusInfo> _rosterCache = [];
   bool _isLoading = false;
   Timer? _refreshTimer;
   Timer? _debounceTimer;
@@ -180,6 +182,7 @@ class StudentStatusProvider extends ChangeNotifier {
           return student;
         }).toList();
 
+        _rosterCache = List.of(newStudents);
         _students = newStudents;
         notifyListeners();
       }
@@ -224,8 +227,11 @@ class StudentStatusProvider extends ChangeNotifier {
 
   void _loadStudentsFromServer() {
     try {
-      final students = ServerService.instance.connectedStudents;
-      _students = students.map((conn) {
+      // 以最近一次 use_list.json 读取的班级名册为基础，合并 ServerService 实时连接状态
+      final roster = List<StudentStatusInfo>.from(_rosterCache);
+      final connections = ServerService.instance.connectedStudents;
+
+      for (final conn in connections) {
         final student = conn.student;
 
         // 【修复】优先使用 conn.studentStatus（typing/exam 状态）
@@ -246,17 +252,27 @@ class StudentStatusProvider extends ChangeNotifier {
           status = StudentStatus.offline;
         }
 
-        return StudentStatusInfo(
-          id: student.id,
-          name: student.name,
-          classId: student.classId,
-          computerName: student.computerName,
-          ip: student.ip,
-          registerTime: student.registerTime,
-          status: status,
-          lastHeartbeat: conn.lastHeartbeat,
-        );
-      }).toList();
+        final index = roster.indexWhere((s) => s.id == student.id);
+        // 身份字段（姓名/班级/IP/电脑名/注册时间）以 use_list.json 名册为准，
+        // 连接数据只贡献实时状态与心跳，避免内存旧数据覆盖文件最新数据
+        if (index != -1) {
+          roster[index].status = status;
+          roster[index].lastHeartbeat = conn.lastHeartbeat;
+        } else {
+          roster.add(StudentStatusInfo(
+            id: student.id,
+            name: student.name,
+            classId: student.classId,
+            computerName: student.computerName,
+            ip: student.ip,
+            registerTime: student.registerTime,
+            status: status,
+            lastHeartbeat: conn.lastHeartbeat,
+          ));
+        }
+      }
+
+      _students = roster;
       notifyListeners();
     } catch (e) {
       // 忽略错误

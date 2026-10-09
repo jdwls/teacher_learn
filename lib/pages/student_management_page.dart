@@ -730,17 +730,26 @@ class _StudentManagementPageState extends State<StudentManagementPage>
         ),
         const SizedBox(width: 12),
         IconButton(
-          onPressed: () {
-            _loadClassData();
+          onPressed: () async {
+            // 【热更新】重新从磁盘读取当前班级学生数据（缓存强制失效），
+            // 手工编辑 use_list.json 后点刷新也能立即看到最新名单
+            if (_selectedClassId != null) {
+              await _httpService.refreshClassFromDisk(_selectedClassId!);
+            }
+            if (!mounted) return;
+            setState(() {
+              _loadClassData();
+              _loadStudents();
+            });
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('已刷新'),
+                content: Text('已重新读取当前班级学生数据'),
                 backgroundColor: Colors.green,
               ),
             );
           },
           icon: const Icon(Icons.refresh),
-          tooltip: '刷新',
+          tooltip: '刷新（重新读取当前班级数据）',
         ),
       ],
     );
@@ -1134,14 +1143,30 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     if (oldClassId != null && oldClassId != newClassId) {
       // 从旧班级移除学生
       final oldStudents = _httpService.loadClassStudents(oldClassId);
-      oldStudents.removeWhere((s) => s['id'] == updatedStudent['id']);
-      // 逐个保存旧班级的剩余学生（更新缓存并标记脏数据）
-      for (final s in oldStudents) {
-        await _httpService.saveStudentToClass(oldClassId, s);
+      final remaining = oldStudents
+          .where((s) => s['id'] != updatedStudent['id'])
+          .map((s) => Map<String, dynamic>.from(s))
+          .toList();
+      // 【热更新】一次性重构旧班级列表并立即写盘（替换原先逐个学生的循环保存，
+      // 避免多轮 I/O 与脏数据残留）
+      if (!await _httpService.replaceClassStudents(oldClassId, remaining)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('旧班级数据更新失败，未完成跨班级移动'),
+                backgroundColor: Colors.red),
+          );
+        }
+        return;
       }
     }
 
     await _httpService.saveStudentToClass(newClassId, updatedStudent);
+    // 【热更新】保存修改后立即落盘并同步缓存，学生端登录/查分即时拿到最新数据
+    await _httpService.flushClassStudentsNow(newClassId);
+    if (oldClassId != null && oldClassId != newClassId) {
+      await _httpService.flushClassStudentsNow(oldClassId);
+    }
 
     setState(() {
       _clearEditPanel();
@@ -1189,6 +1214,8 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     };
 
     await _httpService.saveStudentToClass(classId, student);
+    // 【热更新】添加学生后立即落盘并同步缓存，无需重启教师端即可登录使用
+    await _httpService.flushClassStudentsNow(classId);
 
     setState(() {
       _clearEditPanel();
@@ -1237,6 +1264,8 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     if (!success) {
       throw Exception('学生删除后班级数据保存失败');
     }
+    // 【热更新】删除学生后确保磁盘与缓存一致（当前班级已是最新，防止遗留脏数据）
+    await _httpService.flushClassStudentsNow(classId);
 
     if (_editingStudent != null && _editingStudent!['id'] == student['id']) {
       _clearEditPanel();

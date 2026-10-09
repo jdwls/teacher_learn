@@ -871,6 +871,44 @@ class HttpServerService {
     _enforceCacheLimit(_studentCache, _maxStudentCacheSize);
   }
 
+  /// 【热更新】强制从磁盘重新读取班级学生数据并覆盖缓存。
+  /// 供教师端"保存/删除/同步/刷新"以及学生登录前调用，
+  /// 确保任何时刻读取的都是磁盘上的最新名单（缓存失效、WPS 手工修改等场景）。
+  Future<bool> refreshClassFromDisk(String classId) async {
+    try {
+      final file = File(_getClassFilePath(classId));
+      if (!await file.exists()) {
+        _studentCache.remove(classId);
+        return true;
+      }
+      final content = await file.readAsString();
+      final data = json.decode(content) as Map<String, dynamic>;
+      final students =
+          (data['students'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ??
+              [];
+      _studentCache[classId] = students;
+      return true;
+    } catch (e) {
+      print('重新加载班级 $classId 学生数据失败: $e');
+      // 读取失败时清掉缓存，让后续读取按需重载，避免继续使用过期数据
+      _studentCache.remove(classId);
+      _enforceCacheLimit(_studentCache, _maxStudentCacheSize);
+      return false;
+    }
+  }
+
+  /// 【热更新】立即把指定班级的缓存落盘（取消防抖等待）。
+  /// 教师端"保存修改/添加学生/删除学生"后调用，让磁盘数据与缓存即时一致，
+  /// 后续学生登录用 force-disks 重读时拿到的就是最新数据。
+  Future<void> flushClassStudentsNow(String classId) async {
+    if (_studentCache.containsKey(classId) && !_dirtyClasses.contains(classId)) {
+      // 缓存已是最新且无脏数据，无需写盘
+      return;
+    }
+    if (!_dirtyClasses.contains(classId)) _dirtyClasses.add(classId);
+    await _flushAllDirty();
+  }
+
   void _enforceCacheLimit(Map cache, int maxSize) {
     while (cache.length > maxSize) {
       final firstKey = cache.keys.first;
@@ -1141,6 +1179,8 @@ class HttpServerService {
       String computerName, String ip) async {
     // 学生登录范围严格限定为教师最近一次同步的活跃班级，避免跨班自动登录。
     if (_activeClass.isEmpty) return null;
+    // 【热更新】查找前强制重读磁盘最新名单，确保教师端保存/删除学生立即生效
+    await refreshClassFromDisk(_activeClass);
     final students = await loadClassStudentsAsync(_activeClass);
     for (final s in students) {
       if (s['computer_name'] == computerName && s['ip'] == ip) return s;
@@ -1232,6 +1272,8 @@ class HttpServerService {
         if (loginError != null) return loginError;
 
         if (_activeClass.isNotEmpty) {
+          // 【热更新】登录前强制重读磁盘最新名单，教师端刚删掉/改掉的学生立即失效
+          await refreshClassFromDisk(_activeClass);
           final students = loadClassStudents(_activeClass);
           for (final s in students) {
             if (s['name'] == name && s['password'] == password) {
@@ -1444,6 +1486,8 @@ class HttpServerService {
         final body = await request.readAsString();
         final data = json.decode(body) as Map<String, dynamic>;
         _activeClass = (data['class_id'] as String?) ?? '初一01班';
+        // 【热更新】设置活跃班级的同时立即从磁盘载入最新名单，后续登录直接命中新数据
+        await refreshClassFromDisk(_activeClass);
         print('设置活跃班级: $_activeClass');
         return jsonResponse({'success': true, 'class_id': _activeClass});
       } catch (e) {
@@ -1529,6 +1573,8 @@ class HttpServerService {
         _examTimeLimit = examTimeLimit;
         _earlySubmitMinutes = earlySubmitMinutes;
         clearQuestionBankCache();
+        // 【热更新】同步班级时立即从磁盘载入最新名单，后续登录/自动登录直接使用
+        await refreshClassFromDisk(classId);
         print('同步配置: 班级=$_activeClass, 题库=$_activeBank');
         return jsonResponse({
           'success': true,
@@ -2756,6 +2802,8 @@ class HttpServerService {
   void setActiveClass(String className) {
     _activeClass = className;
     print('活跃班级已设置: $className');
+    // 【热更新】切换/同步活跃班级时，立即从磁盘载入最新名单（异步，不阻塞调用方）
+    unawaited(refreshClassFromDisk(className));
   }
 
   /// 从题库文件读取考试时间限制
@@ -2792,38 +2840,44 @@ class HttpServerService {
     }
   }
 
-  /// 【修复】启动时预填充 _studentCache，从磁盘加载所有班级学生数据
-  /// 避免登录时因缓存为空而找不到已有学生，导致重复注册
+  /// 【性能优化】启动时只预加载"同步后的活跃班级"，不再一次性加载全部班级学生。
+  /// 其余班级走"缓存未命中→按需读磁盘"路径（loadClassStudents/Async 已支持）。
+  /// 依然扫描全部班级文件初始化学生ID自增计数器（只解析、不入缓存）。
   Future<void> _preloadStudentCache() async {
     try {
-      final classIds = getAllClassIds();
-      int totalLoaded = 0;
-      for (final classId in classIds) {
-        final file = File(_getClassFilePath(classId));
-        if (!await file.exists()) continue;
-        final content = await file.readAsString();
-        final data = json.decode(content) as Map<String, dynamic>;
-        final students = (data['students'] as List<dynamic>?)
-                ?.cast<Map<String, dynamic>>() ??
-            [];
-        _studentCache[classId] = students;
-        totalLoaded += students.length;
+      if (_activeClass.isNotEmpty) {
+        final file = File(_getClassFilePath(_activeClass));
+        if (await file.exists()) {
+          final content = await file.readAsString();
+          final data = json.decode(content) as Map<String, dynamic>;
+          final students = (data['students'] as List<dynamic>?)
+                  ?.cast<Map<String, dynamic>>() ??
+              [];
+          _studentCache[_activeClass] = students;
+          print('已预加载活跃班级 $_activeClass：${students.length} 名学生');
+        }
       }
-      print('已预填充学生缓存: ${classIds.length} 个班级，共 $totalLoaded 名学生');
 
-      // 初始化学生ID自增计数器：扫描所有现有学生ID，找到最大值
+      // 初始化学生ID自增计数器：扫描所有现有学生ID，找到最大值（只解析文件，不进缓存）
       int maxId = 0;
-      for (final students in _studentCache.values) {
-        for (final s in students) {
-          final idStr = s['id']?.toString() ?? '';
-          final idNum = int.tryParse(idStr) ?? 0;
-          if (idNum > maxId) maxId = idNum;
+      for (final classId in getAllClassIds()) {
+        try {
+          final content = await File(_getClassFilePath(classId)).readAsString();
+          final data = json.decode(content) as Map<String, dynamic>;
+          final students = data['students'] as List<dynamic>? ?? const [];
+          for (final s in students) {
+            final idStr = s['id']?.toString() ?? '';
+            final idNum = int.tryParse(idStr) ?? 0;
+            if (idNum > maxId) maxId = idNum;
+          }
+        } catch (e) {
+          print('扫描班级 $classId 学生ID失败: $e');
         }
       }
       _nextStudentId = maxId + 1;
       print('学生ID自增计数器已初始化: 起始值=$_nextStudentId (最大现有ID=$maxId)');
     } catch (e) {
-      print('预填充学生缓存失败: $e');
+      print('预加载学生缓存失败: $e');
     }
   }
 }
