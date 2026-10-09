@@ -130,6 +130,21 @@
 - 可为每节课分配班级
 - 课表保存与加载
 
+#### 学生端在线升级
+
+通过整包 ZIP 对学生端做远程升级，升级目录约定为教师端服务器上的 `student_online_update/`（只允许放置整包 `.zip`）：
+
+| 功能 | 说明 |
+|------|------|
+| **总开关** | 开启后学生端才会检查升级（学生端主动检查升级） |
+| **目标学生端版本** | 手动输入目标版本号（必填），点击「开始升级」下发；学生端实际版本与目标版本**不一致即自动更新（支持降级）** |
+| **开始升级** | 触发升级前做前置校验：① 目标版本号已填写；② 升级目录内存在至少一个 `.zip` 升级包。任一为空则不允许升级（Snackbar 提示具体原因）。不对压缩包版本做核对 |
+| **强制升级** | 开启后学生端发现不一致会跳过允许弹窗直接进入升级 |
+| **升级包文件名** | 只读展示当前选中的升级包（自动扫描目录内最新 zip，支持「重新扫描」） |
+| **学生端版本分布** | 学生连接后会上报当前版本，按版本显示各版本学生机数量，用于确认升级覆盖情况 |
+
+升级包制作与教师端接口见「API 服务」章节；配置持久化在 `information/manage/online_update_config.json`。
+
 ---
 
 ### 5. 学生管理（StudentManagement）
@@ -323,6 +338,14 @@ build/windows/x64/runner/Release/
 - 图片引用
 - 考试配置（时间限制、提前交卷时间）
 
+### 在线升级数据
+
+| 文件/目录 | 说明 |
+|------|------|
+| `information/manage/online_update_config.json` | 升级配置：`enabled`（总开关）、`force_update`（强制升级）、`file_name`（选中升级包，自动扫描回填）、`target_version`（教师输入的目标版本）、`updated_at` |
+| `information/manage/student_versions.json` | 学生版本上报汇总（`student_id → 当前版本`），驱动"学生端版本分布"展示 |
+| `student_online_update/` | 整包升级目录，只允许放置 `.zip`（例如由 `build_release.ps1` 打包的 `student_x.y.z.zip`），无需 `version.json` |
+
 ---
 
 ## 🔌 API 服务
@@ -339,6 +362,8 @@ build/windows/x64/runner/Release/
 | `POST /api/schedule` | 保存课表 |
 | `GET /api/typing-config` | 获取打字配置 |
 | `POST /api/typing-config` | 保存打字配置 |
+| `GET /api/student-update/check` | 学生端检查升级：上报 `student_id` 与 `current_version`；服务端按教师配置的 `target_version` 与实际版本比较，**不一致即返回升级信息**（含版本、文件名、大小、MD5、强制升级标记），并记录学生版本上报 |
+| `GET /api/student-update/download/<filename>` | 下载升级整包（支持断点续传，仅允许 `.zip`） |
 
 ### Socket 服务（默认端口 20021）
 

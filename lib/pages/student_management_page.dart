@@ -35,6 +35,8 @@ class _StudentManagementPageState extends State<StudentManagementPage>
   String? _selectedGrade;
   String? _selectedClassId;
   List<Map<String, dynamic>> _students = [];
+  int? _sortColumnIndex;
+  bool _sortAscending = true;
 
   // 编辑区控制器
   Map<String, dynamic>? _editingStudent;
@@ -101,6 +103,22 @@ class _StudentManagementPageState extends State<StudentManagementPage>
       return;
     }
     _students = _httpService.loadClassStudents(_selectedClassId!);
+  }
+
+  void _sortStudents(
+      int columnIndex, Comparable Function(Map<String, dynamic>) key) {
+    setState(() {
+      if (_sortColumnIndex == columnIndex) {
+        _sortAscending = !_sortAscending;
+      } else {
+        _sortColumnIndex = columnIndex;
+        _sortAscending = true;
+      }
+      _students.sort((a, b) {
+        final comparison = key(a).compareTo(key(b));
+        return _sortAscending ? comparison : -comparison;
+      });
+    });
   }
 
   List<String> _getClassIdsForGrade() {
@@ -297,18 +315,24 @@ class _StudentManagementPageState extends State<StudentManagementPage>
               ),
             )
           else
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 5,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                childAspectRatio: 1.8,
-              ),
-              itemCount: _allClassIds.length,
-              itemBuilder: (context, index) {
-                return _buildClassCard(_allClassIds[index]);
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final crossAxisCount =
+                    (constraints.maxWidth / 190).floor().clamp(1, 5);
+                return GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: crossAxisCount,
+                    crossAxisSpacing: 12,
+                    mainAxisSpacing: 12,
+                    mainAxisExtent: 140,
+                  ),
+                  itemCount: _allClassIds.length,
+                  itemBuilder: (context, index) {
+                    return _buildClassCard(_allClassIds[index]);
+                  },
+                );
               },
             ),
         ],
@@ -538,16 +562,14 @@ class _StudentManagementPageState extends State<StudentManagementPage>
           for (final r in (newData['records'] as List).whereType<Map>()) {
             final record = Map<String, dynamic>.from(r);
             merged.add(record);
-            final key =
-                (record['submission_id'] ?? record['submit_time'] ?? '')
-                    .toString();
+            final key = (record['submission_id'] ?? record['submit_time'] ?? '')
+                .toString();
             if (key.isNotEmpty) seen.add(key);
           }
           for (final r in (oldData['records'] as List).whereType<Map>()) {
             final record = Map<String, dynamic>.from(r);
-            final key =
-                (record['submission_id'] ?? record['submit_time'] ?? '')
-                    .toString();
+            final key = (record['submission_id'] ?? record['submit_time'] ?? '')
+                .toString();
             if (key.isNotEmpty && seen.contains(key)) continue;
             merged.add(record);
             if (key.isNotEmpty) seen.add(key);
@@ -592,23 +614,24 @@ class _StudentManagementPageState extends State<StudentManagementPage>
 
       final students = _httpService.loadClassStudents(oldClassId);
 
-    final copiedStudents = students
-        .map((s) => Map<String, dynamic>.from(s)..['class_id'] = newClassId)
-        .toList();
+      final copiedStudents = students
+          .map((s) => Map<String, dynamic>.from(s)..['class_id'] = newClassId)
+          .toList();
 
-    // 【数据迁移】先把旧班级目录下的成绩/错题/积分等文件搬到新班级目录，
-    // 再写名单、删旧目录，避免升级时丢失历史数据。
-    try {
-      await _migrateClassDataFiles(oldClassId, newClassId);
-    } catch (e) {
-      print('班级数据迁移异常: $e');
-    }
+      // 【数据迁移】先把旧班级目录下的成绩/错题/积分等文件搬到新班级目录，
+      // 再写名单、删旧目录，避免升级时丢失历史数据。
+      try {
+        await _migrateClassDataFiles(oldClassId, newClassId);
+      } catch (e) {
+        print('班级数据迁移异常: $e');
+      }
 
-    // 先完整写入并确认新班级文件成功，再删除旧班级。
-    if (!await _httpService.replaceClassStudents(newClassId, copiedStudents)) {
-      throw Exception('新班级数据持久化失败，已保留旧班级');
-    }
-    if (students.isEmpty) {
+      // 先完整写入并确认新班级文件成功，再删除旧班级。
+      if (!await _httpService.replaceClassStudents(
+          newClassId, copiedStudents)) {
+        throw Exception('新班级数据持久化失败，已保留旧班级');
+      }
+      if (students.isEmpty) {
         final dir = Directory('${AppPath.informationDir}/$newClassId');
         if (!dir.existsSync()) {
           dir.createSync(recursive: true);
@@ -921,95 +944,131 @@ class _StudentManagementPageState extends State<StudentManagementPage>
       );
     }
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          minWidth: MediaQuery.of(context).size.width - 64,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minWidth: MediaQuery.of(context).size.width - 64,
+            ),
+            child: DataTable(
+              headingRowColor:
+                  MaterialStateProperty.all(const Color(0xFFF8FAFC)),
+              dataRowMinHeight: 48,
+              dataRowMaxHeight: 56,
+              columnSpacing: 24,
+              horizontalMargin: 16,
+              sortColumnIndex: _sortColumnIndex,
+              sortAscending: _sortAscending,
+              columns: [
+                DataColumn(
+                  label: const Text('姓名',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  onSort: (index, _) => _sortStudents(
+                      index, (student) => student['name']?.toString() ?? ''),
+                ),
+                DataColumn(
+                  label: const Text('密码',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  onSort: (index, _) => _sortStudents(index,
+                      (student) => student['password']?.toString() ?? ''),
+                ),
+                DataColumn(
+                  label: const Text('电脑名称',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  onSort: (index, _) => _sortStudents(index,
+                      (student) => student['computer_name']?.toString() ?? ''),
+                ),
+                DataColumn(
+                  label: const Text('IP 地址',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  onSort: (index, _) => _sortStudents(
+                      index, (student) => student['ip']?.toString() ?? ''),
+                ),
+                DataColumn(
+                  label: const Text('积分',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  onSort: (index, _) => _sortStudents(
+                      index, (student) => _studentPoints(student)),
+                ),
+                const DataColumn(
+                    label: Text('班级',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 13))),
+                const DataColumn(
+                    label: Text('操作',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 13))),
+              ],
+              rows: _students.map((student) {
+                final isEditing = _editingStudent != null &&
+                    _editingStudent!['id'] == student['id'];
+                return DataRow(
+                    selected: isEditing,
+                    onSelectChanged: (_) => _startEditStudent(student),
+                    cells: [
+                      DataCell(Text(student['name'] ?? '',
+                          style: const TextStyle(fontSize: 13))),
+                      DataCell(Text(student['password'] ?? '',
+                          style: const TextStyle(fontSize: 13))),
+                      DataCell(Text(student['computer_name'] ?? '',
+                          style: const TextStyle(fontSize: 13))),
+                      DataCell(Text(student['ip'] ?? '',
+                          style: const TextStyle(fontSize: 13))),
+                      DataCell(Text('${student['points'] ?? 0}',
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600))),
+                      DataCell(Text(student['class_id'] ?? '',
+                          style: const TextStyle(fontSize: 13))),
+                      DataCell(Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextButton(
+                            onPressed: () => _startEditStudent(student),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: const Text('修改',
+                                style: TextStyle(
+                                    fontSize: 12, color: AppTheme.primaryBlue)),
+                          ),
+                          if (isEditing)
+                            TextButton(
+                              onPressed: () => _showDeleteConfirm(student),
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              child: const Text('删除',
+                                  style: TextStyle(
+                                      fontSize: 12, color: AppTheme.dangerRed)),
+                            ),
+                        ],
+                      )),
+                    ]);
+              }).toList(),
+            ),
+          ),
         ),
-        child: DataTable(
-        headingRowColor: MaterialStateProperty.all(const Color(0xFFF8FAFC)),
-        dataRowMinHeight: 48,
-        dataRowMaxHeight: 56,
-        columnSpacing: 24,
-        horizontalMargin: 16,
-        columns: const [
-          DataColumn(
-              label: Text('姓名',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
-          DataColumn(
-              label: Text('密码',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
-          DataColumn(
-              label: Text('电脑名称',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
-          DataColumn(
-              label: Text('IP 地址',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
-          DataColumn(
-              label: Text('积分',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
-          DataColumn(
-              label: Text('班级',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
-          DataColumn(
-              label: Text('操作',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
-        ],
-        rows: _students.map((student) {
-          final isEditing = _editingStudent != null &&
-              _editingStudent!['id'] == student['id'];
-          return DataRow(
-              selected: isEditing,
-              onSelectChanged: (_) => _startEditStudent(student),
-              cells: [
-                DataCell(Text(student['name'] ?? '',
-                    style: const TextStyle(fontSize: 13))),
-                DataCell(Text(student['password'] ?? '',
-                    style: const TextStyle(fontSize: 13))),
-                DataCell(Text(student['computer_name'] ?? '',
-                    style: const TextStyle(fontSize: 13))),
-                DataCell(Text(student['ip'] ?? '',
-                    style: const TextStyle(fontSize: 13))),
-                DataCell(Text('${student['points'] ?? 0}',
-                    style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600))),
-                DataCell(Text(student['class_id'] ?? '',
-                    style: const TextStyle(fontSize: 13))),
-                DataCell(Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextButton(
-                      onPressed: () => _startEditStudent(student),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: const Text('修改',
-                          style: TextStyle(
-                              fontSize: 12, color: AppTheme.primaryBlue)),
-                    ),
-                    TextButton(
-                      onPressed: () => _showDeleteConfirm(student),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: const Text('删除',
-                          style: TextStyle(
-                              fontSize: 12, color: AppTheme.dangerRed)),
-                    ),
-                  ],
-                )),
-              ]);
-        }).toList(),
-        ),
-      ),
+      ],
     );
+  }
+
+  int _studentPoints(Map<String, dynamic> student) {
+    final value = student['points'];
+    return value is int ? value : int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
   // ==================== 学生操作方法 ====================

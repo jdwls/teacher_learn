@@ -1,11 +1,10 @@
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import '../theme/app_theme.dart';
 import '../services/typing_article_service.dart';
 import '../services/http_server_service.dart';
-import '../utils/app_path.dart';
 
 /// 学生端控制页面
 class TypingControlPage extends StatefulWidget {
@@ -47,7 +46,9 @@ class _TypingControlPageState extends State<TypingControlPage>
 
   // 在线升级
   bool _onlineUpdateEnabled = false;
-  final _targetVersionController = TextEditingController();
+  bool _onlineForceUpdate = false;
+  final TextEditingController _targetVersionController =
+      TextEditingController();
 
   final List<String> _classList = [
     for (var g in ['初一', '初二', '初三'])
@@ -61,7 +62,9 @@ class _TypingControlPageState extends State<TypingControlPage>
     _loadArticles();
     _loadSchedule();
     _onlineUpdateEnabled = HttpServerService.instance.onlineUpdateEnabled;
-    _targetVersionController.text = HttpServerService.instance.targetVersion;
+    _onlineForceUpdate = HttpServerService.instance.onlineForceUpdate;
+    _targetVersionController.text =
+        HttpServerService.instance.targetVersion;
   }
 
   @override
@@ -321,8 +324,15 @@ class _TypingControlPageState extends State<TypingControlPage>
 
   // ==================== Tab 3: 在线升级 ====================
 
-  /// 在线升级面板（版本号 + 开始更新按钮）
+  /// 在线升级面板（包文件名 / 强制升级 / 总开关 / 学生端版本分布）
   Widget _buildOnlineUpdatePanel() {
+    final svc = HttpServerService.instance;
+    final packageName = svc.onlinePackageName;
+    final packageInfo = svc.onlinePackageInfo;
+    final distribution = svc.studentVersionDistribution;
+    final totalStudents = distribution.values.fold(0, (a, b) => a + b);
+    final hasPackage = packageName.isNotEmpty && packageInfo != null;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -333,13 +343,18 @@ class _TypingControlPageState extends State<TypingControlPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 是否升级开关
           Row(
             children: [
-              const Icon(Icons.system_update, size: 20, color: AppTheme.primaryBlue),
+              const Icon(Icons.system_update,
+                  size: 20, color: AppTheme.primaryBlue),
               const SizedBox(width: 12),
               const Text('学生端在线升级',
                   style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
               const Spacer(),
+              const Text('学生端主动检查升级',
+                  style: TextStyle(fontSize: 13, color: AppTheme.textPrimary)),
+              const SizedBox(width: 8),
               Switch(
                 value: _onlineUpdateEnabled,
                 onChanged: _toggleOnlineUpdate,
@@ -348,40 +363,188 @@ class _TypingControlPageState extends State<TypingControlPage>
             ],
           ),
           const SizedBox(height: 16),
+          // 强制升级开关
           Row(
             children: [
-              const Text('目标版本号:',
+              const Icon(Icons.priority_high,
+                  size: 20, color: Color(0xFFEA580C)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text('强制升级',
+                        style: TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w600)),
+                    SizedBox(height: 2),
+                    Text('开启后学生端发现新版本会跳过允许弹窗直接进入升级',
+                        style: TextStyle(
+                            fontSize: 11, color: AppTheme.textSecondary)),
+                  ],
+                ),
+              ),
+              Switch(
+                value: _onlineForceUpdate,
+                onChanged: (v) => _toggleForceUpdate(v),
+                activeColor: AppTheme.primaryBlue,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // 升级包文件名（只读展示，来自目录自动扫描）
+          Row(
+            children: [
+              const Icon(Icons.folder_zip,
+                  size: 20, color: AppTheme.primaryBlue),
+              const SizedBox(width: 12),
+              const Text('升级包文件名:',
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               const SizedBox(width: 12),
-              SizedBox(
-                width: 160,
+              Expanded(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFD6DBE8)),
+                  ),
+                  child: Text(
+                    hasPackage
+                        ? packageName
+                        : '未在 student_online_update/ 目录找到 zip 升级包',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: hasPackage
+                          ? AppTheme.textPrimary
+                          : AppTheme.textSecondary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+              if (hasPackage) ...[
+                const SizedBox(width: 12),
+                Text(
+                  '目标版本 ${packageInfo.version.isEmpty ? '未知' : packageInfo.version}'
+                  ' · ${(packageInfo.size / 1024 / 1024).toStringAsFixed(1)} MB',
+                  style: const TextStyle(
+                      fontSize: 12, color: AppTheme.textSecondary),
+                ),
+              ],
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: _refreshOnlinePackages,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('重新扫描'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // 目标学生端版本（教师输入，必填；与学生实际版本不一致即更新，含降级）
+          Row(
+            children: [
+              const Icon(Icons.verified,
+                  size: 20, color: AppTheme.primaryBlue),
+              const SizedBox(width: 12),
+              const Text('目标学生端版本:',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 12),
+              Expanded(
                 child: TextField(
                   controller: _targetVersionController,
+                  keyboardType: TextInputType.text,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(
+                        RegExp(r'[0-9a-zA-Z\.\-_]')),
+                  ],
+                  style: const TextStyle(fontSize: 14),
                   decoration: const InputDecoration(
-                    hintText: '如 1.1.0',
                     isDense: true,
+                    hintText: '如 1.1.0（必填）',
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     filled: true,
                     fillColor: Colors.white,
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(8)),
+                      borderRadius:
+                          BorderRadius.all(Radius.circular(8)),
+                      borderSide: BorderSide(color: Color(0xFFD6DBE8)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius:
+                          BorderRadius.all(Radius.circular(8)),
+                      borderSide: BorderSide(color: Color(0xFFD6DBE8)),
                     ),
                   ),
-                  onChanged: (_) => _saveTargetVersion(),
                 ),
               ),
               const SizedBox(width: 12),
               ElevatedButton.icon(
-                onPressed: _onlineUpdateEnabled ? _startOnlineUpdate : null,
-                icon: const Icon(Icons.rocket_launch, size: 18),
-                label: const Text('开始更新'),
-                style: AppTheme.primaryButtonStyle,
+                onPressed: _startOnlineUpdate,
+                icon: const Icon(Icons.system_update_alt, size: 18),
+                label: const Text('开始升级'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryBlue,
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                ),
               ),
             ],
           ),
           const SizedBox(height: 8),
           const Text(
-              '将新版安装包放入 student_online_update/ 目录，并在该目录 version.json 中填写 file_name（可选 md5 / force_update / min_version）',
+              '学生端会与该目标版本比对，版本不一致即自动更新（支持降级）。开始升级前请确认升级目录内已放入整包 zip。',
               style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 8),
+          const Text(
+              '升级包放置说明：将整包 zip 放入 student_online_update/ 文件夹即可，系统自动识别最新 zip，无需填写文件名。',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+          const SizedBox(height: 16),
+          // 学生端当前版本信息
+          Row(
+            children: [
+              const Icon(Icons.devices, size: 20, color: AppTheme.primaryBlue),
+              const SizedBox(width: 12),
+              const Text('学生端当前版本信息',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 12),
+              Text(
+                totalStudents == 0 ? '暂无上报' : '共 $totalStudents 台已上报',
+                style: const TextStyle(
+                    fontSize: 12, color: AppTheme.textSecondary),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (distribution.isEmpty)
+            const Text(
+              '学生端连接后会定期上报当前版本，这里将显示每个版本的学生机数量。',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final entry in distribution.entries)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFD6DBE8)),
+                    ),
+                    child: Text(
+                      '${entry.key}：${entry.value} 台',
+                      style: const TextStyle(
+                          fontSize: 13, color: AppTheme.textPrimary),
+                    ),
+                  ),
+              ],
+            ),
         ],
       ),
     );
@@ -403,73 +566,56 @@ class _TypingControlPageState extends State<TypingControlPage>
     }
   }
 
-  /// 保存目标版本号（持久化到配置，重启后仍生效）
-  Future<void> _saveTargetVersion() async {
-    final version = _targetVersionController.text.trim();
-    if (version.isEmpty) return;
-    await HttpServerService.instance.setTargetVersion(version);
-  }
-
-  /// 校验 student_online_update 目录下的版本信息与安装包是否就绪
-  /// 返回 null 表示就绪，否则返回错误提示文案
-  Future<String?> _validateOnlineUpdatePackage() async {
-    final dirPath = AppPath.studentOnlineUpdateDir;
-    final versionFile = File('$dirPath${Platform.pathSeparator}version.json');
-    if (!versionFile.existsSync()) {
-      return '未找到 student_online_update/version.json';
-    }
-    try {
-      final data =
-          json.decode(await versionFile.readAsString()) as Map<String, dynamic>;
-      final fileName = (data['file_name'] ?? '').toString().trim();
-      if (fileName.isEmpty) {
-        return 'version.json 里的 file_name 为空，请填写安装包文件名';
-      }
-      final pkgFile = File('$dirPath${Platform.pathSeparator}$fileName');
-      if (!pkgFile.existsSync()) {
-        return '安装包不存在: student_online_update/$fileName';
-      }
-      return null;
-    } catch (e) {
-      return '读取 version.json 失败: $e';
+  /// 切换强制升级开关
+  Future<void> _toggleForceUpdate(bool force) async {
+    setState(() {
+      _onlineForceUpdate = force;
+    });
+    await HttpServerService.instance.setOnlineForceUpdate(force);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(force ? '已开启强制升级' : '已关闭强制升级'),
+          backgroundColor: force ? Colors.green : Colors.orange,
+        ),
+      );
     }
   }
 
-  /// 开始更新
+  /// 重新扫描升级包目录（教师端手动触发）
+  Future<void> _refreshOnlinePackages() async {
+    await HttpServerService.instance.refreshOnlinePackages();
+    if (mounted) setState(() {});
+  }
+
+  /// 下发目标学生端版本（教师端「开始升级」按钮）
+  ///
+  /// 前置校验（任一为空则不能升级）：
+  ///   1. 目标版本号已填写；
+  ///   2. student_online_update 目录内存在升级包 zip。
   Future<void> _startOnlineUpdate() async {
     final version = _targetVersionController.text.trim();
     if (version.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先输入目标版本号'), backgroundColor: Colors.red),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('请先填写目标学生端版本号'),
+        backgroundColor: Colors.orange,
+      ));
       return;
     }
-
-    // 发布前先确认安装包已就绪，否则学生端会静默什么都不做（且无从排查）
-    final packageError = await _validateOnlineUpdatePackage();
-    if (packageError != null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(packageError), backgroundColor: Colors.red),
-        );
-      }
-      return;
-    }
-
-    // 先保存版本号到配置（持久化），再打开全局开关
-    await HttpServerService.instance.setTargetVersion(version);
-    await HttpServerService.instance.setOnlineUpdateEnabled(true);
-
-    if (mounted) {
-      setState(() {
-        _onlineUpdateEnabled = true;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('已发布版本 $version，学生端将在下次启动时升级'),
-          backgroundColor: Colors.green,
-        ),
-      );
+    final svc = HttpServerService.instance;
+    final ok = await svc.setOnlineTargetVersion(version);
+    if (!mounted) return;
+    if (ok) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('已下发目标版本 $version，学生端将自动比对并更新'),
+        backgroundColor: Colors.green,
+      ));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('无法升级：升级目录内没有升级包，请先放入整包 zip'),
+        backgroundColor: Colors.red,
+      ));
     }
   }
 

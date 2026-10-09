@@ -95,12 +95,14 @@ class HttpServerService {
   /// 【Y修复】记录I/O操作失败，触发熔断器
   void _recordIOFailure() {
     _consecutiveFailures++;
-    if (_consecutiveFailures >= _circuitBreakerThreshold && !_circuitBreakerOpen) {
+    if (_consecutiveFailures >= _circuitBreakerThreshold &&
+        !_circuitBreakerOpen) {
       _circuitBreakerOpen = true;
       print('【Y修复】熔断器已打开！连续失败次数: $_consecutiveFailures');
       // 30秒后尝试恢复
       _circuitBreakerTimer?.cancel();
-      _circuitBreakerTimer = Timer(const Duration(seconds: _circuitBreakerResetSeconds), () {
+      _circuitBreakerTimer =
+          Timer(const Duration(seconds: _circuitBreakerResetSeconds), () {
         _circuitBreakerOpen = false;
         _consecutiveFailures = 0;
         print('【Y修复】熔断器恢复，重新允许I/O操作');
@@ -122,52 +124,170 @@ class HttpServerService {
 
   // ============ 在线升级配置 ============
 
-  /// 全局在线升级开关（教师端学生管理页面控制）
+  /// 在线升级配置（持久化到 information/manage/online_update_config.json）
+  ///
+  /// 字段：
+  ///   enabled        —— 是否进行升级（总开关）
+  ///   force_update   —— 是否强制升级
+  ///   file_name      —— 升级整包文件名（自动扫描目录内 .zip，最后回填到这里）
+  ///   target_version —— 教师端输入的目标学生端版本（与学生实际版本不一致即更新，含降级）
+  ///   updated_at     —— 最近一次配置变更时间
   bool _onlineUpdateEnabled = false;
 
   bool get onlineUpdateEnabled => _onlineUpdateEnabled;
 
-  /// 目标版本号（教师端设置，用于和学生端当前版本比较）
-  String _targetVersion = '1.0.0';
+  /// 是否强制升级
+  bool _onlineForceUpdate = false;
 
-  String get targetVersion => _targetVersion;
+  bool get onlineForceUpdate => _onlineForceUpdate;
 
-  /// 设置目标版本号（持久化到 online_update_config.json，重启后仍生效）
-  Future<bool> setTargetVersion(String version) async {
-    _targetVersion = version;
-    return _saveOnlineUpdateEnabled();
-  }
+  /// 教师端输入的目标学生端版本号（为空时学生端不升级）
+  String _onlineTargetVersion = '';
+
+  /// 目标版本号：教师端输入值（与学生实际上报版本比对，不一致即更新）
+  String get targetVersion => _onlineTargetVersion;
+
+  /// 升级整包文件名（自动检测，可被缓存/配置回填）
+  String _onlinePackageName = '';
+
+  String get onlinePackageName => _onlinePackageName;
+
+  /// 已安装升级包元数据缓存（文件名 -> 包信息），启动时刷新一次
+  Map<String, _UpdatePackageInfo> _onlinePackageCache = const {};
+
+  /// 升级包内版本号：从选中压缩包文件名解析（如 student_1.1.0.zip -> 1.1.0）
+  String get packageVersion =>
+      _onlinePackageCache[_onlinePackageName]?.version ?? '';
 
   String get _onlineUpdateConfigPath =>
       path.join(_informationRoot, 'manage', 'online_update_config.json');
 
-  /// 加载在线升级开关配置
+  String get _studentVersionsPath =>
+      path.join(_informationRoot, 'manage', 'student_versions.json');
+
+  /// 加载在线升级配置并扫描升级包目录
   Future<void> _loadOnlineUpdateConfig() async {
+    _onlinePackageCache = _scanUpdatePackages();
+
     try {
       final file = File(_onlineUpdateConfigPath);
       if (await file.exists()) {
         final content = await file.readAsString();
         final data = json.decode(content) as Map<String, dynamic>;
         _onlineUpdateEnabled = data['enabled'] as bool? ?? false;
-        _targetVersion = data['target_version'] as String? ?? '1.0.0';
-        print('已从本地加载在线升级配置: enabled=$_onlineUpdateEnabled, target_version=$_targetVersion');
+        _onlineForceUpdate = data['force_update'] as bool? ?? false;
+        _onlineTargetVersion =
+            (data['target_version'] ?? '').toString().trim();
+        _onlinePackageName =
+            (data['file_name'] ?? '').toString().trim();
       } else {
-        await _saveOnlineUpdateEnabled();
+        await _saveOnlineUpdateConfig();
         print('在线升级配置文件不存在，已创建默认配置');
       }
     } catch (e) {
       print('加载在线升级配置失败: $e');
     }
+
+    // 配置里的 file_name 已失效（包被删除/改名）→ 回落到目录最新包
+    if (_onlinePackageName.isNotEmpty &&
+        !_onlinePackageCache.containsKey(_onlinePackageName)) {
+      print('配置的升级包不存在: $_onlinePackageName，自动切到目录最新包');
+      _onlinePackageName = '';
+    }
+    _onlinePackageName = _resolvePackageName(preferred: _onlinePackageName);
+    _saveOnlineUpdateConfigSafe();
   }
 
-  /// 设置全局在线升级开关（持久化）
+  /// 自动选择升级包：优先用配置指定（若存在），否则取目录内最新的 zip
+  String _resolvePackageName({String preferred = ''}) {
+    if (preferred.isNotEmpty && _onlinePackageCache.containsKey(preferred)) {
+      return preferred;
+    }
+    _UpdatePackageInfo? latest;
+    for (final info in _onlinePackageCache.values) {
+      if (latest == null || info.modified.isAfter(latest.modified)) {
+        latest = info;
+      }
+    }
+    return latest?.fileName ?? '';
+  }
+
+  /// 扫描升级包目录内所有可用 zip（upgrade 目录只允许放压缩包）
+  Map<String, _UpdatePackageInfo> _scanUpdatePackages() {
+    try {
+      final dir = Directory(AppPath.studentOnlineUpdateDir);
+      if (!dir.existsSync()) return const {};
+      final result = <String, _UpdatePackageInfo>{};
+      for (final entity in dir.listSync()) {
+        if (entity is! File) continue;
+        if (path.extension(entity.path).toLowerCase() != '.zip') continue;
+        try {
+          final stat = entity.statSync();
+          result[path.basename(entity.path)] = _UpdatePackageInfo(
+            fileName: path.basename(entity.path),
+            size: stat.size,
+            modified: stat.modified,
+          );
+        } catch (_) {}
+      }
+      return result;
+    } catch (e) {
+      print('扫描升级包目录失败: $e');
+      return const {};
+    }
+  }
+
+  /// 当前选中升级包的信息（不存在返回 null）
+  _UpdatePackageInfo? get onlinePackageInfo =>
+      _onlinePackageCache[_onlinePackageName];
+
+  /// 设置总开关（持久化）
   Future<bool> setOnlineUpdateEnabled(bool enabled) async {
     _onlineUpdateEnabled = enabled;
-    return _saveOnlineUpdateEnabled();
+    return _saveOnlineUpdateConfig();
   }
 
-  /// 保存在线升级配置（开关 + 目标版本号）
-  Future<bool> _saveOnlineUpdateEnabled() async {
+  /// 设置是否强制升级（持久化）
+  Future<bool> setOnlineForceUpdate(bool force) async {
+    _onlineForceUpdate = force;
+    return _saveOnlineUpdateConfig();
+  }
+
+  /// 设置目标学生端版本（持久化）
+  ///
+  /// 升级前置条件校验（教师端「开始升级」时调用）：
+  ///   1. version 非空；
+  ///   2. 升级目录 student_online_update 内存在至少一个 .zip 升级包。
+  /// 不做包版本号核对（目录内只要是 zip 即可用）。
+  /// 校验失败返回 false 并保持原配置不变。
+  Future<bool> setOnlineTargetVersion(String version) async {
+    final v = version.trim();
+    if (v.isEmpty) return false; // 版本号必填
+    _onlinePackageCache = _scanUpdatePackages();
+    if (_onlinePackageCache.isEmpty) return false; // 目录内没有升级包
+    _onlineTargetVersion = v;
+    // 顺手刷新包选择（保留"配置 file_name 优先、失效回落最新 zip"逻辑）
+    if (_onlinePackageName.isNotEmpty &&
+        !_onlinePackageCache.containsKey(_onlinePackageName)) {
+      _onlinePackageName = '';
+    }
+    _onlinePackageName = _resolvePackageName(preferred: _onlinePackageName);
+    return _saveOnlineUpdateConfig();
+  }
+
+  /// 重新扫描升级包目录并刷新选中包（教师端页面手动刷新时调用）
+  Future<void> refreshOnlinePackages() async {
+    _onlinePackageCache = _scanUpdatePackages();
+    if (_onlinePackageName.isNotEmpty &&
+        !_onlinePackageCache.containsKey(_onlinePackageName)) {
+      _onlinePackageName = '';
+    }
+    _onlinePackageName = _resolvePackageName(preferred: _onlinePackageName);
+    await _saveOnlineUpdateConfig();
+  }
+
+  /// 保存在线升级配置（开关 + 强制升级 + 包名）
+  Future<bool> _saveOnlineUpdateConfig() async {
     try {
       final manageDir = Directory(path.join(_informationRoot, 'manage'));
       if (!await manageDir.exists()) {
@@ -176,7 +296,81 @@ class HttpServerService {
       final file = File(_onlineUpdateConfigPath);
       final data = {
         'enabled': _onlineUpdateEnabled,
-        'target_version': _targetVersion, // 新增：目标版本号
+        'force_update': _onlineForceUpdate,
+        'file_name': _onlinePackageName,
+        'target_version': _onlineTargetVersion,
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      final jsonString = const JsonEncoder.withIndent('  ').convert(data);
+      final tempFile = File('${file.path}.tmp');
+      await tempFile.writeAsString(jsonString, flush: true);
+      json.decode(await tempFile.readAsString()); // 原子写前先验证 JSON
+      await tempFile.rename(file.path);
+      return true;
+    } catch (e) {
+      print('保存在线升级配置失败: $e');
+      return false;
+    }
+  }
+
+  /// 尽力保存配置（失败不影响主流程）
+  void _saveOnlineUpdateConfigSafe() {
+    _saveOnlineUpdateConfig();
+  }
+
+  // ============ 学生端版本上报记录 ============
+
+  /// 学生端当前版本（student_id -> version），由 /check 接口持续刷新
+  Map<String, String> _studentVersions = {};
+
+  Map<String, String> get studentVersions =>
+      Map<String, String>.unmodifiable(_studentVersions);
+
+  /// 版本分布（version -> 台数），教师端 UI 展示用
+  Map<String, int> get studentVersionDistribution {
+    final dist = <String, int>{};
+    for (final v in _studentVersions.values) {
+      final key = v.isEmpty ? '未上报' : v;
+      dist[key] = (dist[key] ?? 0) + 1;
+    }
+    return dist;
+  }
+
+  /// 记录一个学生上报的当前版本（内存即时生效 + 原子落盘，失败不影响主流程）
+  Future<void> recordStudentVersion(String studentId, String version) async {
+    final id = studentId.trim();
+    final v = version.trim();
+    if (id.isEmpty) return;
+    if (_studentVersions[id] == v) return; // 无变化不重复写盘
+    _studentVersions[id] = v;
+    _saveStudentVersionSummary();
+  }
+
+  /// 启动时加载学生版本汇总文件
+  Future<void> _loadStudentVersions() async {
+    _studentVersions = {};
+    try {
+      final file = File(_studentVersionsPath);
+      if (!await file.exists()) return;
+      final data =
+          json.decode(await file.readAsString()) as Map<String, dynamic>;
+      final mapping = data['students'] as Map<String, dynamic>? ?? {};
+      _studentVersions = mapping.map((k, v) => MapEntry(k, v?.toString() ?? ''));
+    } catch (e) {
+      print('读取学生版本汇总失败: $e');
+    }
+  }
+
+  /// 原子保存学生版本汇总文件
+  Future<void> _saveStudentVersionSummary() async {
+    try {
+      final manageDir = Directory(path.join(_informationRoot, 'manage'));
+      if (!await manageDir.exists()) {
+        await manageDir.create(recursive: true);
+      }
+      final file = File(_studentVersionsPath);
+      final data = {
+        'students': _studentVersions,
         'updated_at': DateTime.now().toIso8601String(),
       };
       final jsonString = const JsonEncoder.withIndent('  ').convert(data);
@@ -184,13 +378,11 @@ class HttpServerService {
       await tempFile.writeAsString(jsonString, flush: true);
       json.decode(await tempFile.readAsString());
       await tempFile.rename(file.path);
-      print('已保存在线升级配置: enabled=$_onlineUpdateEnabled, target_version=$_targetVersion');
-      return true;
     } catch (e) {
-      print('保存在线升级配置失败: $e');
-      return false;
+      print('保存学生版本汇总失败: $e');
     }
   }
+
 
   /// 安装包 MD5 缓存（key = 路径|大小|修改时间），避免每次 /check 都重算大文件哈希
   String? _packageMd5CacheKey;
@@ -266,7 +458,8 @@ class HttpServerService {
         await manageDir.create(recursive: true);
       }
       final file = File(pointsExchangeConfigPath);
-      final jsonString = const JsonEncoder.withIndent('  ').convert(pointsExchangeConfig);
+      final jsonString =
+          const JsonEncoder.withIndent('  ').convert(pointsExchangeConfig);
       final tempFile = File('${file.path}.tmp');
       await tempFile.writeAsString(jsonString, flush: true);
       json.decode(await tempFile.readAsString());
@@ -306,9 +499,11 @@ class HttpServerService {
   @visibleForTesting
   String sanitizeFileName(String input) {
     if (input.isEmpty) return 'unknown';
-    var sanitized = input.replaceAll('..', '').replaceAll('/', '_').replaceAll('\\', '_');
+    var sanitized =
+        input.replaceAll('..', '').replaceAll('/', '_').replaceAll('\\', '_');
     // 保留 . 字符以支持文件扩展名，但限制连续多个 . 的情况
-    sanitized = sanitized.replaceAll(RegExp(r'[^\u4e00-\u9fa5a-zA-Z0-9\-_.]'), '_');
+    sanitized =
+        sanitized.replaceAll(RegExp(r'[^\u4e00-\u9fa5a-zA-Z0-9\-_.]'), '_');
     // 合并连续的下划线和点
     sanitized = sanitized.replaceAll(RegExp(r'_+'), '_');
     sanitized = sanitized.replaceAll(RegExp(r'\.+'), '.');
@@ -321,7 +516,8 @@ class HttpServerService {
     return sanitized;
   }
 
-  String get _typingConfigPath => path.join(_informationRoot, 'manage', 'typing_config.json');
+  String get _typingConfigPath =>
+      path.join(_informationRoot, 'manage', 'typing_config.json');
 
   Future<void> _loadTypingConfig() async {
     try {
@@ -356,7 +552,8 @@ class HttpServerService {
       final tempFile = File('${file.path}.tmp');
 
       // 1. 写入临时文件
-      final jsonString = const JsonEncoder.withIndent('  ').convert(typingConfig);
+      final jsonString =
+          const JsonEncoder.withIndent('  ').convert(typingConfig);
       await tempFile.writeAsString(jsonString, flush: true);
 
       // 2. 验证 JSON 格式
@@ -393,7 +590,8 @@ class HttpServerService {
   String get questionBankDir => path.join(_projectRoot, '题库');
   String get _informationRoot => path.join(_projectRoot, 'information');
 
-  String _getClassDir(String classId) => path.join(_informationRoot, sanitizeFileName(classId));
+  String _getClassDir(String classId) =>
+      path.join(_informationRoot, sanitizeFileName(classId));
   Future<void> _ensureClassDir(String classId) async {
     final dir = Directory(_getClassDir(classId));
     if (!await dir.exists()) {
@@ -402,12 +600,15 @@ class HttpServerService {
   }
 
   String _getScoreClassDir(String classId) => _getClassDir(classId);
-  Future<void> _ensureScoreDir(String classId) async => _ensureClassDir(classId);
-  String _getClassFilePath(String classId) => path.join(_getClassDir(classId), 'use_list.json');
+  Future<void> _ensureScoreDir(String classId) async =>
+      _ensureClassDir(classId);
+  String _getClassFilePath(String classId) =>
+      path.join(_getClassDir(classId), 'use_list.json');
 
-  Future<bool> _withScoreFileLock(
-      String classId, String fileName, void Function(Map<String, dynamic> data) updater) async {
-    final lockKey = '${sanitizeFileName(classId)}/${sanitizeFileName(fileName)}';
+  Future<bool> _withScoreFileLock(String classId, String fileName,
+      void Function(Map<String, dynamic> data) updater) async {
+    final lockKey =
+        '${sanitizeFileName(classId)}/${sanitizeFileName(fileName)}';
     final previous = _scoreFileLocks[lockKey];
     if (previous != null && !previous.isCompleted) {
       try {
@@ -441,7 +642,8 @@ class HttpServerService {
     }
   }
 
-  Future<Map<String, dynamic>> _readScoreFileAsync(String classId, String fileName) async {
+  Future<Map<String, dynamic>> _readScoreFileAsync(
+      String classId, String fileName) async {
     try {
       final file = File(path.join(_getScoreClassDir(classId), fileName));
       if (!await file.exists()) return {'records': []};
@@ -452,7 +654,8 @@ class HttpServerService {
     }
   }
 
-  Future<bool> _writeScoreFile(String classId, String fileName, Map<String, dynamic> data) async {
+  Future<bool> _writeScoreFile(
+      String classId, String fileName, Map<String, dynamic> data) async {
     if (!_canPerformIO()) {
       print('【Y修复】熔断器打开中，跳过成绩文件写入');
       return false;
@@ -561,10 +764,12 @@ class HttpServerService {
   Middleware addCorsHeaders() {
     return createMiddleware(
       requestHandler: (Request request) {
-        if (request.method == 'OPTIONS') return Response.ok('', headers: _corsHeaders);
+        if (request.method == 'OPTIONS')
+          return Response.ok('', headers: _corsHeaders);
         return null;
       },
-      responseHandler: (Response response) => response.change(headers: _corsHeaders),
+      responseHandler: (Response response) =>
+          response.change(headers: _corsHeaders),
     );
   }
 
@@ -599,24 +804,32 @@ class HttpServerService {
   static const int _maxNameLength = 50;
   static const int _maxPasswordLength = 128;
 
-  Response? _validateInputLength(String name, String password, String classId, String bankName) {
+  Response? _validateInputLength(
+      String name, String password, String classId, String bankName) {
     if (name.length > _maxNameLength)
-      return jsonResponse({'success': false, 'error': '姓名过长（最多 $_maxNameLength 字符）'}, status: 400);
+      return jsonResponse(
+          {'success': false, 'error': '姓名过长（最多 $_maxNameLength 字符）'},
+          status: 400);
     if (password.length > _maxPasswordLength)
-      return jsonResponse({'success': false, 'error': '密码过长（最多 $_maxPasswordLength 字符）'},
+      return jsonResponse(
+          {'success': false, 'error': '密码过长（最多 $_maxPasswordLength 字符）'},
           status: 400);
     if (classId.length > _maxNameLength)
-      return jsonResponse({'success': false, 'error': '班级名称过长（最多 $_maxNameLength 字符）'},
+      return jsonResponse(
+          {'success': false, 'error': '班级名称过长（最多 $_maxNameLength 字符）'},
           status: 400);
     if (bankName.length > _maxNameLength)
-      return jsonResponse({'success': false, 'error': '题库名称过长（最多 $_maxNameLength 字符）'},
+      return jsonResponse(
+          {'success': false, 'error': '题库名称过长（最多 $_maxNameLength 字符）'},
           status: 400);
     return null;
   }
 
   Future<Map<String, dynamic>?> loadQuestionBank(String bankName) async {
-    if (_questionBankCache.containsKey(bankName)) return _questionBankCache[bankName];
-    if (_questionBankLoading.containsKey(bankName)) return _questionBankLoading[bankName];
+    if (_questionBankCache.containsKey(bankName))
+      return _questionBankCache[bankName];
+    if (_questionBankLoading.containsKey(bankName))
+      return _questionBankLoading[bankName];
     final future = _doLoadQuestionBank(bankName);
     _questionBankLoading[bankName] = future;
     try {
@@ -704,7 +917,9 @@ class HttpServerService {
       if (!file.existsSync()) return [];
       final content = file.readAsStringSync();
       final data = json.decode(content) as Map<String, dynamic>;
-      final students = (data['students'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+      final students =
+          (data['students'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ??
+              [];
       _studentCache[classId] = students;
       return students;
     } catch (e) {
@@ -713,14 +928,17 @@ class HttpServerService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> loadClassStudentsAsync(String classId) async {
+  Future<List<Map<String, dynamic>>> loadClassStudentsAsync(
+      String classId) async {
     if (_studentCache.containsKey(classId)) return _studentCache[classId]!;
     try {
       final file = File(_getClassFilePath(classId));
       if (!await file.exists()) return [];
       final content = await file.readAsString();
       final data = json.decode(content) as Map<String, dynamic>;
-      final students = (data['students'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+      final students =
+          (data['students'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ??
+              [];
       _studentCache[classId] = students;
       return students;
     } catch (e) {
@@ -728,7 +946,8 @@ class HttpServerService {
     }
   }
 
-  Future<bool> replaceClassStudents(String classId, List<Map<String, dynamic>> students) async {
+  Future<bool> replaceClassStudents(
+      String classId, List<Map<String, dynamic>> students) async {
     try {
       await _ensureClassDir(classId);
       final file = File(_getClassFilePath(classId));
@@ -742,7 +961,8 @@ class HttpServerService {
       await temp.writeAsString(encoded, flush: true);
       json.decode(await temp.readAsString());
       await temp.rename(file.path);
-      _studentCache[classId] = students.map((s) => Map<String, dynamic>.from(s)).toList();
+      _studentCache[classId] =
+          students.map((s) => Map<String, dynamic>.from(s)).toList();
       _dirtyClasses.remove(classId);
       return true;
     } catch (e) {
@@ -751,7 +971,8 @@ class HttpServerService {
     }
   }
 
-  Future<void> saveStudentToClass(String classId, Map<String, dynamic> student) async {
+  Future<void> saveStudentToClass(
+      String classId, Map<String, dynamic> student) async {
     try {
       final dir = Directory(_informationRoot);
       if (!dir.existsSync()) dir.createSync(recursive: true);
@@ -803,8 +1024,9 @@ class HttpServerService {
         }
 
         // 构建 id -> existingStudent 的 Map
-        final existingStudents =
-            (existingData['students'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+        final existingStudents = (existingData['students'] as List<dynamic>?)
+                ?.cast<Map<String, dynamic>>() ??
+            [];
         final Map<String, Map<String, dynamic>> existingStudentsMap = {};
         for (final s in existingStudents) {
           final id = s['id'] as String?;
@@ -826,11 +1048,13 @@ class HttpServerService {
             // 更新 HttpServerService 管理的字段
             merged['name'] = s['name'];
             merged['password'] = s['password'];
-            merged['computer_name'] = s['computer_name'] ?? existing['computer_name'];
+            merged['computer_name'] =
+                s['computer_name'] ?? existing['computer_name'];
             merged['ip'] = s['ip'] ?? existing['ip'];
             merged['points'] = s['points'] ?? existing['points'];
             merged['last_login'] = s['last_login'] ?? existing['last_login'];
-            merged['register_time'] = s['register_time'] ?? existing['register_time'];
+            merged['register_time'] =
+                s['register_time'] ?? existing['register_time'];
             mergedStudents.add(merged);
           } else {
             mergedStudents.add(Map<String, dynamic>.from(s));
@@ -886,7 +1110,9 @@ class HttpServerService {
           final emergencyFile = File(_getClassFilePath(classId) + '.emergency');
           // 使用临时文件写入，避免紧急保存本身损坏
           final tempEmergency = File('${emergencyFile.path}.tmp');
-          tempEmergency.writeAsStringSync(const JsonEncoder.withIndent('  ').convert(data), flush: true);
+          tempEmergency.writeAsStringSync(
+              const JsonEncoder.withIndent('  ').convert(data),
+              flush: true);
           tempEmergency.renameSync(emergencyFile.path);
           print('紧急保存班级 $classId 数据到: ${emergencyFile.path}');
         } catch (e) {
@@ -911,40 +1137,27 @@ class HttpServerService {
     return allStudents;
   }
 
-  Future<Map<String, dynamic>?> findStudentByDevice(String computerName, String ip) async {
-    // 1. 优先在活跃班级中按「电脑名 + IP」精确匹配
-    if (_activeClass.isNotEmpty) {
-      // 使用异步版本，缓存为空时会自动从磁盘文件加载
-      final students = await loadClassStudentsAsync(_activeClass);
-      for (final s in students) {
-        if (s['computer_name'] == computerName && s['ip'] == ip) return s;
-      }
+  Future<Map<String, dynamic>?> findStudentByDevice(
+      String computerName, String ip) async {
+    // 学生登录范围严格限定为教师最近一次同步的活跃班级，避免跨班自动登录。
+    if (_activeClass.isEmpty) return null;
+    final students = await loadClassStudentsAsync(_activeClass);
+    for (final s in students) {
+      if (s['computer_name'] == computerName && s['ip'] == ip) return s;
     }
 
-    // 2. 活跃班级未命中时，回退到所有班级精确匹配
-    //    （班级升级等场景下活跃班级可能一时未更新，避免自动登录直接失效）
-    for (final classId in getAllClassIds()) {
-      if (classId == _activeClass) continue;
-      final students = await loadClassStudentsAsync(classId);
-      for (final s in students) {
-        if (s['computer_name'] == computerName && s['ip'] == ip) return s;
-      }
-    }
-
-    // 3. 仍未命中时，放宽为按「电脑名」匹配，兼容 DHCP 导致 IP 变化的情况
+    // 允许 DHCP 更换 IP，但仍只在活跃班级内按电脑名匹配。
     if (computerName.isNotEmpty) {
-      for (final classId in getAllClassIds()) {
-        final students = await loadClassStudentsAsync(classId);
-        for (final s in students) {
-          if (s['computer_name'] == computerName) return s;
-        }
+      for (final s in students) {
+        if (s['computer_name'] == computerName) return s;
       }
     }
 
     return null;
   }
 
-  Future<Map<String, dynamic>?> updateStudentPoints(String studentId, int delta) async {
+  Future<Map<String, dynamic>?> updateStudentPoints(
+      String studentId, int delta) async {
     for (final classId in getAllClassIds()) {
       final students = loadClassStudents(classId);
       final index = students.indexWhere((s) => s['id'] == studentId);
@@ -961,9 +1174,10 @@ class HttpServerService {
   }
 
   Response jsonResponse(Map<String, dynamic> data, {int status = 200}) {
-    return Response(status,
-        body: json.encode(data),
-        headers: {'Content-Type': 'application/json; charset=utf-8', ..._corsHeaders});
+    return Response(status, body: json.encode(data), headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      ..._corsHeaders
+    });
   }
 
   Future<void> startServer(int port) async {
@@ -976,6 +1190,8 @@ class HttpServerService {
     await _loadPointsExchangeConfig();
     // 【在线升级】加载全局开关配置
     await _loadOnlineUpdateConfig();
+    // 【在线升级】加载学生端版本上报汇总
+    await _loadStudentVersions();
 
     // 【修复】启动时预填充 _studentCache，避免登录时找不到已有学生
     await _preloadStudentCache();
@@ -989,12 +1205,12 @@ class HttpServerService {
     // 健康检查
     router.get(
         '/api/health',
-        (Request request) =>
-            jsonResponse({'status': 'ok', 'timestamp': DateTime.now().toIso8601String()}));
+        (Request request) => jsonResponse(
+            {'status': 'ok', 'timestamp': DateTime.now().toIso8601String()}));
 
     // 教师状态检查
-    router.get(
-        '/api/teacher/status', (Request request) => jsonResponse({'active': _isTeacherActive}));
+    router.get('/api/teacher/status',
+        (Request request) => jsonResponse({'active': _isTeacherActive}));
 
     // ============ 认证 API ============
 
@@ -1008,7 +1224,8 @@ class HttpServerService {
         final ip = data['ip'] as String? ?? '';
 
         if (name.isEmpty || password.isEmpty) {
-          return jsonResponse({'success': false, 'message': '姓名和密码不能为空'}, status: 400);
+          return jsonResponse({'success': false, 'message': '姓名和密码不能为空'},
+              status: 400);
         }
 
         final loginError = _validateInputLength(name, password, '', '');
@@ -1037,16 +1254,20 @@ class HttpServerService {
                     'ip': ip,
                     'points': s['points'] ?? 0,
                   },
-                  'token': 'student_${s['id']}_${DateTime.now().millisecondsSinceEpoch}',
+                  'token':
+                      'student_${s['id']}_${DateTime.now().millisecondsSinceEpoch}',
                 }
               });
             }
           }
         }
 
-        return jsonResponse({'success': false, 'message': '姓名或密码错误，请确认已在当前班级注册'}, status: 401);
+        return jsonResponse(
+            {'success': false, 'message': '姓名或密码错误，请确认已在当前班级注册'},
+            status: 401);
       } catch (e) {
-        return jsonResponse({'success': false, 'message': '登录失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'message': '登录失败: $e'},
+            status: 500);
       }
     });
 
@@ -1061,14 +1282,16 @@ class HttpServerService {
         final ip = data['ip'] as String? ?? '';
 
         if (name.isEmpty || password.isEmpty || classId.isEmpty) {
-          return jsonResponse({'success': false, 'message': '姓名、密码和班级不能为空'}, status: 400);
+          return jsonResponse({'success': false, 'message': '姓名、密码和班级不能为空'},
+              status: 400);
         }
 
         final registerError = _validateInputLength(name, password, classId, '');
         if (registerError != null) return registerError;
 
         final existingStudents = loadClassStudents(classId);
-        final existingIndex = existingStudents.indexWhere((s) => s['name'] == name);
+        final existingIndex =
+            existingStudents.indexWhere((s) => s['name'] == name);
         if (existingIndex != -1) {
           final existing = existingStudents[existingIndex];
           existing['password'] = password;
@@ -1088,7 +1311,8 @@ class HttpServerService {
                 'ip': ip,
                 'points': existing['points'] ?? 0,
               },
-              'token': 'student_${existing['id']}_${DateTime.now().millisecondsSinceEpoch}',
+              'token':
+                  'student_${existing['id']}_${DateTime.now().millisecondsSinceEpoch}',
             }
           });
         }
@@ -1119,18 +1343,22 @@ class HttpServerService {
               'ip': ip,
               'points': 0,
             },
-            'token': 'student_${studentId}_${DateTime.now().millisecondsSinceEpoch}',
+            'token':
+                'student_${studentId}_${DateTime.now().millisecondsSinceEpoch}',
           }
         });
       } catch (e) {
-        return jsonResponse({'success': false, 'message': '注册失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'message': '注册失败: $e'},
+            status: 500);
       }
     });
 
     // ============ 打字配置 API ============
 
-    router.get('/api/typing-config',
-        (Request request) => jsonResponse({'success': true, 'data': typingConfig}));
+    router.get(
+        '/api/typing-config',
+        (Request request) =>
+            jsonResponse({'success': true, 'data': typingConfig}));
 
     router.get('/api/typing-config/<type>', (Request request, String type) {
       if (type != 'chinese' && type != 'english')
@@ -1145,11 +1373,14 @@ class HttpServerService {
         if (data.containsKey('chinese')) {
           final chinese = data['chinese'] as Map<String, dynamic>;
           typingConfig['chinese'] = {
-            'time_limit': chinese['time_limit'] ?? typingConfig['chinese']['time_limit'],
-            'target_chars': chinese['target_chars'] ?? typingConfig['chinese']['target_chars'],
-            'target_speed': chinese['target_speed'] ?? typingConfig['chinese']['target_speed'],
-            'points_per_error':
-                chinese['points_per_error'] ?? typingConfig['chinese']['points_per_error'],
+            'time_limit':
+                chinese['time_limit'] ?? typingConfig['chinese']['time_limit'],
+            'target_chars': chinese['target_chars'] ??
+                typingConfig['chinese']['target_chars'],
+            'target_speed': chinese['target_speed'] ??
+                typingConfig['chinese']['target_speed'],
+            'points_per_error': chinese['points_per_error'] ??
+                typingConfig['chinese']['points_per_error'],
             'random': chinese['random'] ?? typingConfig['chinese']['random'],
             'selected_article_index': chinese['selected_article_index'],
           };
@@ -1157,11 +1388,14 @@ class HttpServerService {
         if (data.containsKey('english')) {
           final english = data['english'] as Map<String, dynamic>;
           typingConfig['english'] = {
-            'time_limit': english['time_limit'] ?? typingConfig['english']['time_limit'],
-            'target_chars': english['target_chars'] ?? typingConfig['english']['target_chars'],
-            'target_speed': english['target_speed'] ?? typingConfig['english']['target_speed'],
-            'points_per_error':
-                english['points_per_error'] ?? typingConfig['english']['points_per_error'],
+            'time_limit':
+                english['time_limit'] ?? typingConfig['english']['time_limit'],
+            'target_chars': english['target_chars'] ??
+                typingConfig['english']['target_chars'],
+            'target_speed': english['target_speed'] ??
+                typingConfig['english']['target_speed'],
+            'points_per_error': english['points_per_error'] ??
+                typingConfig['english']['points_per_error'],
             'random': english['random'] ?? typingConfig['english']['random'],
             'selected_article_index': english['selected_article_index'],
           };
@@ -1180,7 +1414,8 @@ class HttpServerService {
         print('打字配置已更新: $typingConfig');
         return jsonResponse({'success': true, 'data': typingConfig});
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '更新配置失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '更新配置失败: $e'},
+            status: 500);
       }
     });
 
@@ -1198,8 +1433,10 @@ class HttpServerService {
     });
 
     // 获取当前活跃班级
-    router.get('/api/active-class',
-        (Request request) => jsonResponse({'success': true, 'class_id': _activeClass}));
+    router.get(
+        '/api/active-class',
+        (Request request) =>
+            jsonResponse({'success': true, 'class_id': _activeClass}));
 
     // 设置当前活跃班级
     router.post('/api/active-class', (Request request) async {
@@ -1210,18 +1447,22 @@ class HttpServerService {
         print('设置活跃班级: $_activeClass');
         return jsonResponse({'success': true, 'class_id': _activeClass});
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '设置失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '设置失败: $e'},
+            status: 500);
       }
     });
 
     // 获取已有班级列表
-    router.get('/api/student/classes',
-        (Request request) => jsonResponse({'success': true, 'classes': getAllClassIds()}));
+    router.get(
+        '/api/student/classes',
+        (Request request) =>
+            jsonResponse({'success': true, 'classes': getAllClassIds()}));
 
     // 获取题库列表
     router.get('/api/question-banks', (Request request) async {
       final dir = Directory(questionBankDir);
-      if (!await dir.exists()) return jsonResponse({'success': true, 'data': []});
+      if (!await dir.exists())
+        return jsonResponse({'success': true, 'data': []});
       final banks = <Map<String, dynamic>>[];
       await for (final entity in dir.list()) {
         if (entity is Directory) {
@@ -1232,8 +1473,10 @@ class HttpServerService {
     });
 
     // 获取当前激活的题库
-    router.get('/api/active-bank',
-        (Request request) => jsonResponse({'success': true, 'bank': _activeBank ?? ''}));
+    router.get(
+        '/api/active-bank',
+        (Request request) =>
+            jsonResponse({'success': true, 'bank': _activeBank ?? ''}));
 
     // 设置激活的题库
     router.post('/api/active-bank', (Request request) async {
@@ -1245,11 +1488,13 @@ class HttpServerService {
         // 从题库文件读取考试时间限制和提前交卷时间
         if (_activeBank != null) {
           _examTimeLimit = await _loadExamTimeLimitFromBank(_activeBank!);
-          _earlySubmitMinutes = await _loadEarlySubmitMinutesFromBank(_activeBank!);
+          _earlySubmitMinutes =
+              await _loadEarlySubmitMinutesFromBank(_activeBank!);
         }
 
         clearQuestionBankCache();
-        print('激活题库: $_activeBank, 考试时间: $_examTimeLimit 分钟, 提前交卷: $_earlySubmitMinutes 分钟');
+        print(
+            '激活题库: $_activeBank, 考试时间: $_examTimeLimit 分钟, 提前交卷: $_earlySubmitMinutes 分钟');
         return jsonResponse({
           'success': true,
           'bank': _activeBank ?? '',
@@ -1257,7 +1502,44 @@ class HttpServerService {
           'early_submit_minutes': _earlySubmitMinutes,
         });
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '设置失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '设置失败: $e'},
+            status: 500);
+      }
+    });
+
+    // 原子更新后续登录使用的班级和题库。已有学生会话不在此处重新认证或改写。
+    router.post('/api/sync-config', (Request request) async {
+      try {
+        final body = await request.readAsString();
+        final data = json.decode(body) as Map<String, dynamic>;
+        final classId = data['class_id'] as String?;
+        final bank = data['bank'] as String?;
+        if (classId == null ||
+            classId.isEmpty ||
+            bank == null ||
+            bank.isEmpty) {
+          return jsonResponse({'success': false, 'error': '班级和题库不能为空'},
+              status: 400);
+        }
+
+        final examTimeLimit = await _loadExamTimeLimitFromBank(bank);
+        final earlySubmitMinutes = await _loadEarlySubmitMinutesFromBank(bank);
+        _activeClass = classId;
+        _activeBank = bank;
+        _examTimeLimit = examTimeLimit;
+        _earlySubmitMinutes = earlySubmitMinutes;
+        clearQuestionBankCache();
+        print('同步配置: 班级=$_activeClass, 题库=$_activeBank');
+        return jsonResponse({
+          'success': true,
+          'class_id': _activeClass,
+          'bank': _activeBank,
+          'exam_time_limit': _examTimeLimit,
+          'early_submit_minutes': _earlySubmitMinutes,
+        });
+      } catch (e) {
+        return jsonResponse({'success': false, 'error': '同步配置失败: $e'},
+            status: 500);
       }
     });
 
@@ -1272,16 +1554,19 @@ class HttpServerService {
 
         if (bankName == null || bankName.isEmpty) {
           print('同步失败: 缺少题库名称');
-          return jsonResponse({'success': false, 'error': '缺少题库名称'}, status: 400);
+          return jsonResponse({'success': false, 'error': '缺少题库名称'},
+              status: 400);
         }
         // 只检查危险路径穿越字符，不限制中文括号等合法字符
         if (bankName.contains('..') ||
             bankName.contains('/') ||
             bankName.contains('\\')) {
           print('同步失败: 题库名称包含非法路径字符, bankName=$bankName');
-          return jsonResponse(
-              {'success': false, 'error_code': 'invalid_bank_name', 'error': '题库名称不合法'},
-              status: 400);
+          return jsonResponse({
+            'success': false,
+            'error_code': 'invalid_bank_name',
+            'error': '题库名称不合法'
+          }, status: 400);
         }
 
         // 使用原始名称读取文件（目录名可能是中文括号等合法字符）
@@ -1289,12 +1574,15 @@ class HttpServerService {
         final bankFile = File(bankPath);
         if (!await bankFile.exists()) {
           print('同步失败: 题库不存在, path=$bankPath');
-          return jsonResponse({'success': false, 'error': '题库不存在'}, status: 404);
+          return jsonResponse({'success': false, 'error': '题库不存在'},
+              status: 404);
         }
         if (await bankFile.length() > _maxSyncBankContentBytes) {
-          return jsonResponse(
-              {'success': false, 'error_code': 'sync_payload_too_large', 'error': '题库内容过大，暂不支持同步'},
-              status: 413);
+          return jsonResponse({
+            'success': false,
+            'error_code': 'sync_payload_too_large',
+            'error': '题库内容过大，暂不支持同步'
+          }, status: 413);
         }
 
         final bankContent = await bankFile.readAsString();
@@ -1312,18 +1600,24 @@ class HttpServerService {
             if (entity is! File) continue;
             final normalizedEntityPath = path.normalize(entity.path);
             if (!path.isWithin(normalizedOperationPath, normalizedEntityPath)) {
-              return jsonResponse(
-                  {'success': false, 'error_code': 'invalid_operation_path', 'error': '操作题文件路径不合法'},
-                  status: 400);
+              return jsonResponse({
+                'success': false,
+                'error_code': 'invalid_operation_path',
+                'error': '操作题文件路径不合法'
+              }, status: 400);
             }
             final relativePath = path
                 .relative(normalizedEntityPath, from: normalizedOperationPath)
                 .replaceAll('\\', '/');
             if (relativePath.isEmpty ||
-                relativePath.split('/').any((part) => part.isEmpty || part == '..')) {
-              return jsonResponse(
-                  {'success': false, 'error_code': 'invalid_operation_path', 'error': '操作题文件路径不合法'},
-                  status: 400);
+                relativePath
+                    .split('/')
+                    .any((part) => part.isEmpty || part == '..')) {
+              return jsonResponse({
+                'success': false,
+                'error_code': 'invalid_operation_path',
+                'error': '操作题文件路径不合法'
+              }, status: 400);
             }
 
             final fileSize = await entity.length();
@@ -1338,8 +1632,9 @@ class HttpServerService {
             final fileContent = await entity.readAsBytes();
             final base64Content = base64Encode(fileContent);
             totalOperationBytes += fileSize;
-            estimatedResponseBytes +=
-                utf8.encode(relativePath).length + utf8.encode(base64Content).length + 100;
+            estimatedResponseBytes += utf8.encode(relativePath).length +
+                utf8.encode(base64Content).length +
+                100;
             if (estimatedResponseBytes > _maxSyncResponseBytes) {
               return jsonResponse({
                 'success': false,
@@ -1364,7 +1659,8 @@ class HttpServerService {
         });
       } catch (e) {
         print('同步题库文件失败: $e');
-        return jsonResponse({'success': false, 'error': '同步失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '同步失败: $e'},
+            status: 500);
       }
     });
 
@@ -1385,20 +1681,23 @@ class HttpServerService {
             }));
 
     // 获取指定题库内容
-    router.get('/api/question-banks/<bank_name>', (Request request, String bankName) async {
+    router.get('/api/question-banks/<bank_name>',
+        (Request request, String bankName) async {
       // 【修复】对 bankName 进行 URL 解码，确保中文字符和特殊字符正确处理
       final decodedBankName = Uri.decodeComponent(bankName);
       print('获取题库内容: $bankName -> 解码后: $decodedBankName');
       final data = await loadQuestionBank(decodedBankName);
       if (data == null) {
-        print('题库文件不存在: ${path.join(questionBankDir, decodedBankName, '题库.json')}');
+        print(
+            '题库文件不存在: ${path.join(questionBankDir, decodedBankName, '题库.json')}');
         return jsonResponse({'success': false, 'error': '题库不存在'}, status: 404);
       }
       return jsonResponse({'success': true, 'data': data});
     });
 
     // 获取学生详细数据
-    router.get('/api/student-detail/<student_id>', (Request request, String studentId) async {
+    router.get('/api/student-detail/<student_id>',
+        (Request request, String studentId) async {
       try {
         Map<String, dynamic>? studentInfo;
         for (final classId in getAllClassIds()) {
@@ -1414,30 +1713,34 @@ class HttpServerService {
         }
 
         final examResults = <Map<String, dynamic>>[];
-        final resolvedClassId =
-            studentInfo?['class_id'] as String? ?? _findClassByStudentId(studentId);
+        final resolvedClassId = studentInfo?['class_id'] as String? ??
+            _findClassByStudentId(studentId);
         if (resolvedClassId != null) {
-          final examData = await _readScoreFileAsync(resolvedClassId, '小测成绩表.json');
+          final examData =
+              await _readScoreFileAsync(resolvedClassId, '小测成绩表.json');
           for (final r in (examData['records'] as List<dynamic>? ?? [])) {
             final record = r as Map<String, dynamic>;
             if (record['student_id'] == studentId) examResults.add(record);
           }
 
-          final typingData = await _readScoreFileAsync(resolvedClassId, '中英文打字成绩表.json');
+          final typingData =
+              await _readScoreFileAsync(resolvedClassId, '中英文打字成绩表.json');
           final typingResults = <Map<String, dynamic>>[];
           for (final r in (typingData['records'] as List<dynamic>? ?? [])) {
             final record = r as Map<String, dynamic>;
             if (record['student_id'] == studentId) typingResults.add(record);
           }
 
-          final wrongData = await _readScoreFileAsync(resolvedClassId, '错题记录.json');
+          final wrongData =
+              await _readScoreFileAsync(resolvedClassId, '错题记录.json');
           final wrongQuestions = <Map<String, dynamic>>[];
           for (final r in (wrongData['records'] as List<dynamic>? ?? [])) {
             final record = r as Map<String, dynamic>;
             if (record['student_id'] == studentId) wrongQuestions.add(record);
           }
 
-          final pointsData = await _readScoreFileAsync(resolvedClassId, '积分增加详细表.json');
+          final pointsData =
+              await _readScoreFileAsync(resolvedClassId, '积分增加详细表.json');
           final pointsRecords = <Map<String, dynamic>>[];
           for (final r in (pointsData['records'] as List<dynamic>? ?? [])) {
             final record = r as Map<String, dynamic>;
@@ -1463,7 +1766,8 @@ class HttpServerService {
           'points_records': []
         });
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '获取学生详情失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '获取学生详情失败: $e'},
+            status: 500);
       }
     });
 
@@ -1481,7 +1785,8 @@ class HttpServerService {
           return jsonResponse({'student': null});
         }
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '查找失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '查找失败: $e'},
+            status: 500);
       }
     });
 
@@ -1492,7 +1797,8 @@ class HttpServerService {
         final data = json.decode(body) as Map<String, dynamic>;
         final classId = data['class_id'] as String? ?? '';
         if (classId.isEmpty)
-          return jsonResponse({'success': false, 'error': '缺少class_id'}, status: 400);
+          return jsonResponse({'success': false, 'error': '缺少class_id'},
+              status: 400);
 
         final student = {
           'id': data['id'] ?? (_nextStudentId++).toString(),
@@ -1506,9 +1812,11 @@ class HttpServerService {
         };
         await saveStudentToClass(classId, student);
         print('学生已注册到班级 $classId: ${student['name']}');
-        return jsonResponse({'success': true, 'message': '注册成功', 'student': student});
+        return jsonResponse(
+            {'success': true, 'message': '注册成功', 'student': student});
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '注册失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '注册失败: $e'},
+            status: 500);
       }
     });
 
@@ -1520,33 +1828,42 @@ class HttpServerService {
         final studentId = data['student_id'] as String? ?? '';
         final delta = data['delta'] as int? ?? 0;
         if (studentId.isEmpty)
-          return jsonResponse({'success': false, 'error': '缺少student_id'}, status: 400);
+          return jsonResponse({'success': false, 'error': '缺少student_id'},
+              status: 400);
 
         final result = await updateStudentPoints(studentId, delta);
         if (result != null) {
           return jsonResponse({'success': true, 'points': result['points']});
         } else {
-          return jsonResponse({'success': false, 'error': '学生不存在'}, status: 404);
+          return jsonResponse({'success': false, 'error': '学生不存在'},
+              status: 404);
         }
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '更新积分失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '更新积分失败: $e'},
+            status: 500);
       }
     });
 
     // 获取打字文章列表
     router.get('/api/typing-articles/<type>', (Request request, String type) {
       if (type != 'chinese' && type != 'english')
-        return jsonResponse({'success': false, 'error': '类型无效，支持 chinese 和 english'}, status: 400);
+        return jsonResponse(
+            {'success': false, 'error': '类型无效，支持 chinese 和 english'},
+            status: 400);
       final articles = TypingArticleService.getAllArticles(type);
       return jsonResponse({'success': true, 'data': articles});
     });
 
     // 获取随机打字文章
-    router.get('/api/typing-articles/<type>/random', (Request request, String type) async {
+    router.get('/api/typing-articles/<type>/random',
+        (Request request, String type) async {
       if (type != 'chinese' && type != 'english')
-        return jsonResponse({'success': false, 'error': '类型无效，支持 chinese 和 english'}, status: 400);
+        return jsonResponse(
+            {'success': false, 'error': '类型无效，支持 chinese 和 english'},
+            status: 400);
       final article = await TypingArticleService.getRandomArticle(type);
-      if (article == null) return jsonResponse({'success': false, 'error': '暂无文章'}, status: 404);
+      if (article == null)
+        return jsonResponse({'success': false, 'error': '暂无文章'}, status: 404);
       return jsonResponse({'success': true, 'content': article});
     });
 
@@ -1562,21 +1879,26 @@ class HttpServerService {
         final bankName = data['bank_name'] as String? ?? '';
         final score = data['score'] as int? ?? 0;
         final classId = data['class_id'] as String? ?? '';
-        final questionsDetail = data['questions_detail'] as List<dynamic>? ?? [];
+        final questionsDetail =
+            data['questions_detail'] as List<dynamic>? ?? [];
 
         if (studentId.isEmpty) {
-          return jsonResponse({'success': false, 'error': '缺少student_id'}, status: 400);
+          return jsonResponse({'success': false, 'error': '缺少student_id'},
+              status: 400);
         }
 
-        final resolvedClassId = classId.isNotEmpty ? classId : _findClassByStudentId(studentId);
+        final resolvedClassId =
+            classId.isNotEmpty ? classId : _findClassByStudentId(studentId);
         if (resolvedClassId == null) {
-          return jsonResponse({'success': false, 'error': '找不到学生班级'}, status: 404);
+          return jsonResponse({'success': false, 'error': '找不到学生班级'},
+              status: 404);
         }
 
         // 计算积分
         final points = (score * 0.1).round();
 
-        final examSaved = await _withScoreFileLock(resolvedClassId, '小测成绩表.json', (examData) {
+        final examSaved =
+            await _withScoreFileLock(resolvedClassId, '小测成绩表.json', (examData) {
           final records = (examData['records'] as List<dynamic>?) ?? [];
           records.add({
             'student_id': studentId,
@@ -1589,15 +1911,18 @@ class HttpServerService {
         });
 
         if (!examSaved) {
-          return jsonResponse({'success': false, 'error': '成绩写入失败，请稍后重试'}, status: 503);
+          return jsonResponse({'success': false, 'error': '成绩写入失败，请稍后重试'},
+              status: 503);
         }
 
         // 保存错题记录
-        final wrongQuestions = questionsDetail.where((q) => q['is_correct'] == false).toList();
+        final wrongQuestions =
+            questionsDetail.where((q) => q['is_correct'] == false).toList();
         final wrongCount = wrongQuestions.length;
         final totalCount = questionsDetail.length;
 
-        final wrongSaved = await _withScoreFileLock(resolvedClassId, '错题记录.json', (wrongData) {
+        final wrongSaved =
+            await _withScoreFileLock(resolvedClassId, '错题记录.json', (wrongData) {
           final records = (wrongData['records'] as List<dynamic>?) ?? [];
           records.add({
             'student_id': studentId,
@@ -1610,13 +1935,15 @@ class HttpServerService {
           });
         });
         if (!wrongSaved) {
-          return jsonResponse({'success': false, 'error': '错题记录写入失败，请稍后重试'}, status: 503);
+          return jsonResponse({'success': false, 'error': '错题记录写入失败，请稍后重试'},
+              status: 503);
         }
 
         // 同步积分
         if (points > 0) {
           // 记录积分变动明细（积分增加详细表），供学生端积分变化图表使用
-          await _withScoreFileLock(resolvedClassId, '积分增加详细表.json', (pointsData) {
+          await _withScoreFileLock(resolvedClassId, '积分增加详细表.json',
+              (pointsData) {
             final records = (pointsData['records'] as List<dynamic>?) ?? [];
             records.add({
               'student_id': studentId,
@@ -1644,7 +1971,8 @@ class HttpServerService {
           }
         });
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '提交答卷失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '提交答卷失败: $e'},
+            status: 500);
       }
     });
 
@@ -1660,13 +1988,17 @@ class HttpServerService {
         final classId = data['class_id'] as String? ?? '';
 
         if (studentId.isEmpty)
-          return jsonResponse({'success': false, 'error': '缺少student_id'}, status: 400);
+          return jsonResponse({'success': false, 'error': '缺少student_id'},
+              status: 400);
 
-        final resolvedClassId = classId.isNotEmpty ? classId : _findClassByStudentId(studentId);
+        final resolvedClassId =
+            classId.isNotEmpty ? classId : _findClassByStudentId(studentId);
         if (resolvedClassId == null)
-          return jsonResponse({'success': false, 'error': '找不到学生班级'}, status: 404);
+          return jsonResponse({'success': false, 'error': '找不到学生班级'},
+              status: 404);
 
-        final examSaved = await _withScoreFileLock(resolvedClassId, '小测成绩表.json', (examData) {
+        final examSaved =
+            await _withScoreFileLock(resolvedClassId, '小测成绩表.json', (examData) {
           final records = (examData['records'] as List<dynamic>?) ?? [];
           records.add({
             'student_id': studentId,
@@ -1679,12 +2011,14 @@ class HttpServerService {
         });
 
         if (!examSaved) {
-          return jsonResponse({'success': false, 'error': '成绩写入失败，请稍后重试'}, status: 503);
+          return jsonResponse({'success': false, 'error': '成绩写入失败，请稍后重试'},
+              status: 503);
         }
 
         if (points > 0) {
           // 记录积分变动明细
-          await _withScoreFileLock(resolvedClassId, '积分增加详细表.json', (pointsData) {
+          await _withScoreFileLock(resolvedClassId, '积分增加详细表.json',
+              (pointsData) {
             final records = (pointsData['records'] as List<dynamic>?) ?? [];
             records.add({
               'student_id': studentId,
@@ -1701,7 +2035,8 @@ class HttpServerService {
         print('小测成绩已保存: $studentName - $examName - 得分$score');
         return jsonResponse({'success': true});
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '保存小测成绩失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '保存小测成绩失败: $e'},
+            status: 500);
       }
     });
 
@@ -1724,15 +2059,18 @@ class HttpServerService {
         final errorCount = data['error_count'] as int? ?? 0;
 
         if (studentId.isEmpty)
-          return jsonResponse({'success': false, 'error': '缺少student_id'}, status: 400);
+          return jsonResponse({'success': false, 'error': '缺少student_id'},
+              status: 400);
 
-        final resolvedClassId = classId.isNotEmpty ? classId : _findClassByStudentId(studentId);
+        final resolvedClassId =
+            classId.isNotEmpty ? classId : _findClassByStudentId(studentId);
         if (resolvedClassId == null)
-          return jsonResponse({'success': false, 'error': '找不到学生班级'}, status: 404);
+          return jsonResponse({'success': false, 'error': '找不到学生班级'},
+              status: 404);
 
         bool isDuplicate = false;
-        final typingSaved =
-            await _withScoreFileLock(resolvedClassId, '中英文打字成绩表.json', (typingData) {
+        final typingSaved = await _withScoreFileLock(
+            resolvedClassId, '中英文打字成绩表.json', (typingData) {
           final records = (typingData['records'] as List<dynamic>?) ?? [];
           // 幂等：按 submission_id 查重，重复提交直接返回现有积分
           if (submissionId.isNotEmpty) {
@@ -1762,12 +2100,14 @@ class HttpServerService {
         });
 
         if (!typingSaved) {
-          return jsonResponse({'success': false, 'error': '打字成绩写入失败，请稍后重试'}, status: 503);
+          return jsonResponse({'success': false, 'error': '打字成绩写入失败，请稍后重试'},
+              status: 503);
         }
 
         if (points > 0 && !isDuplicate) {
           // 记录积分变动明细（积分增加详细表），供学生端积分变化图表使用
-          await _withScoreFileLock(resolvedClassId, '积分增加详细表.json', (pointsData) {
+          await _withScoreFileLock(resolvedClassId, '积分增加详细表.json',
+              (pointsData) {
             final records = (pointsData['records'] as List<dynamic>?) ?? [];
             records.add({
               'student_id': studentId,
@@ -1791,7 +2131,8 @@ class HttpServerService {
           'total_points': totalPoints,
         });
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '保存打字成绩失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '保存打字成绩失败: $e'},
+            status: 500);
       }
     });
 
@@ -1805,17 +2146,21 @@ class HttpServerService {
         final classId = data['class_id'] as String? ?? '';
 
         if (studentId.isEmpty)
-          return jsonResponse({'success': false, 'error': '缺少student_id'}, status: 400);
+          return jsonResponse({'success': false, 'error': '缺少student_id'},
+              status: 400);
 
-        final resolvedClassId = classId.isNotEmpty ? classId : _findClassByStudentId(studentId);
+        final resolvedClassId =
+            classId.isNotEmpty ? classId : _findClassByStudentId(studentId);
         if (resolvedClassId == null)
-          return jsonResponse({'success': false, 'error': '找不到学生班级'}, status: 404);
+          return jsonResponse({'success': false, 'error': '找不到学生班级'},
+              status: 404);
 
-        final pointsSaved = await _withScoreFileLock(resolvedClassId, '积分增加详细表.json', (pointsData) {
+        final pointsSaved = await _withScoreFileLock(
+            resolvedClassId, '积分增加详细表.json', (pointsData) {
           final records = (pointsData['records'] as List<dynamic>?) ?? [];
           final today = DateTime.now().toString().substring(0, 10);
-          final existingIndex =
-              records.indexWhere((r) => r['student_id'] == studentId && r['date'] == today);
+          final existingIndex = records.indexWhere(
+              (r) => r['student_id'] == studentId && r['date'] == today);
           if (existingIndex != -1) {
             final existing = records[existingIndex] as Map<String, dynamic>;
             existing['points'] = (existing['points'] as int? ?? 0) + points;
@@ -1830,26 +2175,34 @@ class HttpServerService {
         });
 
         if (!pointsSaved) {
-          return jsonResponse({'success': false, 'error': '积分记录写入失败，请稍后重试'}, status: 503);
+          return jsonResponse({'success': false, 'error': '积分记录写入失败，请稍后重试'},
+              status: 503);
         }
 
         print('积分变动已保存: $studentName +$points');
         return jsonResponse({'success': true});
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '保存积分变动失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '保存积分变动失败: $e'},
+            status: 500);
       }
     });
 
     // 获取班级成绩汇总
-    router.get('/api/score/summary/<class_id>', (Request request, String classId) async {
+    router.get('/api/score/summary/<class_id>',
+        (Request request, String classId) async {
       try {
         final decodedClassId = Uri.decodeComponent(classId);
         print('获取成绩汇总: $classId -> $decodedClassId');
-        final examData = await _readScoreFileAsync(decodedClassId, '小测成绩表.json');
-        final typingData = await _readScoreFileAsync(decodedClassId, '中英文打字成绩表.json');
-        final pointsData = await _readScoreFileAsync(decodedClassId, '积分增加详细表.json');
-        final detailData = await _readScoreFileAsync(decodedClassId, '学生成绩详细情况表.json');
-        final wrongData = await _readScoreFileAsync(decodedClassId, '错题记录.json');
+        final examData =
+            await _readScoreFileAsync(decodedClassId, '小测成绩表.json');
+        final typingData =
+            await _readScoreFileAsync(decodedClassId, '中英文打字成绩表.json');
+        final pointsData =
+            await _readScoreFileAsync(decodedClassId, '积分增加详细表.json');
+        final detailData =
+            await _readScoreFileAsync(decodedClassId, '学生成绩详细情况表.json');
+        final wrongData =
+            await _readScoreFileAsync(decodedClassId, '错题记录.json');
 
         return jsonResponse({
           'success': true,
@@ -1860,22 +2213,24 @@ class HttpServerService {
           'wrong_questions': wrongData['records'] ?? [],
         });
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '获取成绩汇总失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '获取成绩汇总失败: $e'},
+            status: 500);
       }
     });
 
     // 获取课表
     router.get('/api/schedule', (Request request) async {
       try {
-        final scheduleFile =
-            File(path.join(_projectRoot, 'information', 'manage', 'schedule.json'));
+        final scheduleFile = File(
+            path.join(_projectRoot, 'information', 'manage', 'schedule.json'));
         if (await scheduleFile.exists()) {
           final content = json.decode(await scheduleFile.readAsString());
           return jsonResponse({'success': true, 'data': content});
         }
         return jsonResponse({'success': true, 'data': null});
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '获取课表失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '获取课表失败: $e'},
+            status: 500);
       }
     });
 
@@ -1884,7 +2239,8 @@ class HttpServerService {
       try {
         final body = await request.readAsString();
         final data = json.decode(body) as Map<String, dynamic>;
-        final scheduleDir = Directory(path.join(_projectRoot, 'information', 'manage'));
+        final scheduleDir =
+            Directory(path.join(_projectRoot, 'information', 'manage'));
         if (!scheduleDir.existsSync()) scheduleDir.createSync(recursive: true);
 
         final scheduleFile = File(path.join(scheduleDir.path, 'schedule.json'));
@@ -1912,10 +2268,12 @@ class HttpServerService {
               await tempFile.delete();
             }
           } catch (_) {}
-          return jsonResponse({'success': false, 'error': '保存课表失败: $e'}, status: 503);
+          return jsonResponse({'success': false, 'error': '保存课表失败: $e'},
+              status: 503);
         }
       } catch (e) {
-        return jsonResponse({'success': false, 'error': '保存课表失败: $e'}, status: 500);
+        return jsonResponse({'success': false, 'error': '保存课表失败: $e'},
+            status: 500);
       }
     });
 
@@ -1939,12 +2297,14 @@ class HttpServerService {
           pointsExchangeConfig = data;
           if (!await _savePointsExchangeConfig()) {
             pointsExchangeConfig = previousConfig;
-            return jsonResponse({'success': false, 'error': '保存积分兑换配置失败'}, status: 500);
+            return jsonResponse({'success': false, 'error': '保存积分兑换配置失败'},
+                status: 500);
           }
           print('积分兑换配置已更新');
           return jsonResponse({'success': true, 'data': pointsExchangeConfig});
         } catch (e) {
-          return jsonResponse({'success': false, 'error': '更新积分兑换配置失败: $e'}, status: 500);
+          return jsonResponse({'success': false, 'error': '更新积分兑换配置失败: $e'},
+              status: 500);
         }
       });
     });
@@ -1960,17 +2320,20 @@ class HttpServerService {
           final itemId = data['item_id'] as int? ?? 0;
 
           if (studentId.isEmpty) {
-            return jsonResponse({'success': false, 'error': '缺少student_id'}, status: 400);
+            return jsonResponse({'success': false, 'error': '缺少student_id'},
+                status: 400);
           }
           if (itemId == 0) {
-            return jsonResponse({'success': false, 'error': '缺少item_id'}, status: 400);
+            return jsonResponse({'success': false, 'error': '缺少item_id'},
+                status: 400);
           }
 
           // 查找兑换商品
           final items = (pointsExchangeConfig['items'] as List<dynamic>? ?? []);
           final itemIndex = items.indexWhere((i) => i['id'] == itemId);
           if (itemIndex == -1) {
-            return jsonResponse({'success': false, 'error': '商品不存在'}, status: 404);
+            return jsonResponse({'success': false, 'error': '商品不存在'},
+                status: 404);
           }
 
           final item = items[itemIndex] as Map<String, dynamic>;
@@ -2004,20 +2367,24 @@ class HttpServerService {
           }
 
           if (studentData == null || studentClassId == null) {
-            return jsonResponse({'success': false, 'error': '学生不存在'}, status: 404);
+            return jsonResponse({'success': false, 'error': '学生不存在'},
+                status: 404);
           }
 
           final currentPoints = studentData['points'] as int? ?? 0;
           if (currentPoints < pointsCost) {
-            return jsonResponse(
-                {'success': false, 'error': '积分不足，需要 $pointsCost 积分，当前 $currentPoints 积分'});
+            return jsonResponse({
+              'success': false,
+              'error': '积分不足，需要 $pointsCost 积分，当前 $currentPoints 积分'
+            });
           }
 
           // 在配置持久化失败时回滚内存中的积分、库存和兑换记录。
           final previousStudentPoints = currentPoints;
           final previousStock = stock;
           final previousRecordsLength =
-              (pointsExchangeConfig['exchange_records'] as List<dynamic>? ?? []).length;
+              (pointsExchangeConfig['exchange_records'] as List<dynamic>? ?? [])
+                  .length;
 
           // 扣减学生积分
           studentData['points'] = currentPoints - pointsCost;
@@ -2035,7 +2402,9 @@ class HttpServerService {
           }
 
           // 写入兑换记录
-          final records = (pointsExchangeConfig['exchange_records'] as List<dynamic>? ?? []);
+          final records =
+              (pointsExchangeConfig['exchange_records'] as List<dynamic>? ??
+                  []);
           records.add({
             'student_id': studentId,
             'student_name': studentName,
@@ -2058,7 +2427,8 @@ class HttpServerService {
             }
             pointsExchangeConfig['exchange_records'] = records;
             _dirtyClasses.remove(studentClassId);
-            return jsonResponse({'success': false, 'error': '兑换记录保存失败，请重试'}, status: 503);
+            return jsonResponse({'success': false, 'error': '兑换记录保存失败，请重试'},
+                status: 503);
           }
 
           // P2：立即刷新班级学生文件（不等 500ms）
@@ -2082,7 +2452,9 @@ class HttpServerService {
             } catch (e) {
               print('回滚兑换配置失败: $e');
             }
-            return jsonResponse({'success': false, 'error': '学生数据更新失败，兑换已回滚，请重试'}, status: 503);
+            return jsonResponse(
+                {'success': false, 'error': '学生数据更新失败，兑换已回滚，请重试'},
+                status: 503);
           }
 
           // 更新积分缓存
@@ -2097,7 +2469,8 @@ class HttpServerService {
             'points_cost': pointsCost,
           });
         } catch (e) {
-          return jsonResponse({'success': false, 'error': '兑换失败: $e'}, status: 500);
+          return jsonResponse({'success': false, 'error': '兑换失败: $e'},
+              status: 500);
         }
       });
     });
@@ -2113,60 +2486,57 @@ class HttpServerService {
 
     // ============ 在线升级 API ============
 
-    /// 获取在线升级版本信息
-    router.get('/api/student-update/version', (Request request) async {
-      final versionFile = File(path.join(AppPath.studentOnlineUpdateDir, 'version.json'));
-      if (!await versionFile.exists()) {
-        return jsonResponse({'success': false, 'error': '暂无更新版本信息'}, status: 404);
-      }
-      try {
-        final content = await versionFile.readAsString();
-        final data = json.decode(content) as Map<String, dynamic>;
-        return jsonResponse({'success': true, 'data': data});
-      } catch (e) {
-        return jsonResponse({'success': false, 'error': '读取版本信息失败: $e'}, status: 500);
-      }
-    });
-
     /// 检查学生端是否有更新可用
     /// 参数: student_id, current_version
+    ///
+    /// 所有信息来自 information/manage/online_update_config.json + 升级目录扫描：
+    ///   enabled        —— 是否进行升级（总开关）
+    ///   force_update   —— 是否强制升级
+    ///   target_version —— 教师端输入的目标版本（与学生实际上报版本比对，不一致即更新，含降级）
+    ///   file_name      —— 升级整包（目录扫描自动选择，不核对包版本号）
     router.get('/api/student-update/check', (Request request) async {
-      final currentVersion = request.url.queryParameters['current_version'] ?? '';
+      final studentId = request.url.queryParameters['student_id'] ?? '';
+      final currentVersion =
+          request.url.queryParameters['current_version'] ?? '';
 
       if (currentVersion.isEmpty) {
-        return jsonResponse({'success': false, 'error': '缺少current_version'}, status: 400);
+        return jsonResponse({'success': false, 'error': '缺少current_version'},
+            status: 400);
       }
 
-      // 1. 教师端开关关闭 → 不升级
+      // 1. 记录学生端当前版本（教师端"学生端当前版本信息"数据源）
+      await recordStudentVersion(studentId, currentVersion);
+
+      // 2. 总开关关闭 → 不升级
       if (!_onlineUpdateEnabled) {
         return jsonResponse({
           'success': true,
           'update_available': false,
           'online_update_enabled': false,
-          'target_version': _targetVersion,
+          'target_version': targetVersion,
           'version': null,
         });
       }
 
-      // 2. 获取下载文件名（从 version.json 读取）
-      final versionFile = File(path.join(AppPath.studentOnlineUpdateDir, 'version.json'));
-      Map<String, dynamic> versionData = {};
-      String? fileName;
-      if (await versionFile.exists()) {
-        try {
-          final content = await versionFile.readAsString();
-          versionData = json.decode(content) as Map<String, dynamic>;
-          fileName = versionData['file_name'] as String? ?? '';
-        } catch (_) {}
+      // 3. 目标版本未配置（教师端未下发）→ 学生端不升级
+      final targetVersionStr = targetVersion;
+      if (targetVersionStr.isEmpty) {
+        return jsonResponse({
+          'success': true,
+          'update_available': false,
+          'online_update_enabled': true,
+          'target_version': '',
+          'version': null,
+        });
       }
 
-      // 3. 比较版本：只有目标版本"高于"学生端当前版本才提示更新（避免降级/版本抖动）
-      final targetVersion = _targetVersion.trim();
-      final fileNameTrimmed = (fileName ?? '').trim();
+      // 4. 选中升级包（目录扫描自动选择，目录只允许 zip）
+      final packageInfo = onlinePackageInfo;
+      final fileNameTrimmed = packageInfo?.fileName ?? '';
 
-      // 安装包信息：version.json 未填时按实际文件补齐（学生端用于下载完整性校验）
-      var fileSize = (versionData['file_size'] as num?)?.toInt() ?? 0;
-      var md5Hex = (versionData['md5'] ?? '').toString().trim().toLowerCase();
+      // 5. 包信息（学生端用于下载完整性校验）
+      var fileSize = packageInfo?.size ?? 0;
+      var md5Hex = '';
       if (fileNameTrimmed.isNotEmpty) {
         final pkgPath =
             path.join(AppPath.studentOnlineUpdateDir, fileNameTrimmed);
@@ -2176,45 +2546,40 @@ class HttpServerService {
             if (await pkgFile.exists()) fileSize = await pkgFile.length();
           } catch (_) {}
         }
-        if (md5Hex.isEmpty) {
-          md5Hex = await _getPackageMd5(pkgPath);
-        }
+        md5Hex = await _getPackageMd5(pkgPath);
       }
 
-      // 强制更新：version.json 显式打开，或学生端当前版本低于 min_version
-      final minVersion = (versionData['min_version'] ?? '').toString().trim();
-      final forceUpdate = versionData['force_update'] == true ||
-          (minVersion.isNotEmpty &&
-              _compareVersions(currentVersion, minVersion) < 0);
-
-      // 没有安装包文件名时一律不提示更新（否则学生端会静默失败，且教师端无从察觉）
-      final updateAvailable = _onlineUpdateEnabled &&
-          targetVersion.isNotEmpty &&
-          fileNameTrimmed.isNotEmpty &&
-          _compareVersions(targetVersion, currentVersion) > 0;
+      // 6. 比较版本：目标版本与学生实际版本不一致即更新（含降级）；完全一致才跳过
+      final forceUpdate = _onlineForceUpdate;
+      final updateAvailable = fileNameTrimmed.isNotEmpty &&
+          targetVersionStr != currentVersion;
 
       return jsonResponse({
         'success': true,
         'update_available': updateAvailable,
         'online_update_enabled': _onlineUpdateEnabled,
-        'target_version': targetVersion,
+        'force_update': forceUpdate,
+        'target_version': targetVersionStr,
         'version': {
-          ...versionData,
-          'version': targetVersion, // 目标版本号以教师端设置为准
+          'version': targetVersionStr,
           'file_name': fileNameTrimmed,
           'file_size': fileSize,
           'md5': md5Hex,
-          'min_version': minVersion,
           'force_update': forceUpdate,
         },
       });
     });
 
-    /// 下载更新文件（支持断点续传）
-    router.get('/api/student-update/download/<filename>', (Request request, String filename) async {
+    /// 下载更新文件（支持断点续传，只允许压缩包）
+    router.get('/api/student-update/download/<filename>',
+        (Request request, String filename) async {
       final decodedFilename = Uri.decodeComponent(filename);
       // 路径穿越保护
       if (decodedFilename.contains('..')) {
+        return Response.forbidden('访问被拒绝');
+      }
+      // 目录内只允许升级压缩包
+      if (path.extension(decodedFilename).toLowerCase() != '.zip') {
         return Response.forbidden('访问被拒绝');
       }
       final baseDir = path.normalize(AppPath.studentOnlineUpdateDir);
@@ -2241,7 +2606,10 @@ class HttpServerService {
               ? (int.tryParse(rangeParts[1]) ?? fileLength - 1)
               : fileLength - 1;
 
-          if (start >= 0 && start < fileLength && end >= start && end < fileLength) {
+          if (start >= 0 &&
+              start < fileLength &&
+              end >= start &&
+              end < fileLength) {
             final chunkLength = end - start + 1;
             final randomAccessFile = await file.open(mode: FileMode.read);
             try {
@@ -2252,7 +2620,8 @@ class HttpServerService {
                 'Content-Length': chunkLength.toString(),
                 'Content-Range': 'bytes $start-$end/$fileLength',
                 'Accept-Ranges': 'bytes',
-                'Content-Disposition': 'attachment; filename="$decodedFilename"',
+                'Content-Disposition':
+                    'attachment; filename="$decodedFilename"',
                 ..._corsHeaders,
               });
             } finally {
@@ -2286,13 +2655,15 @@ class HttpServerService {
             print('警告: 静态文件路径包含遍历字符，已拒绝: $decodedPath');
             return Response.forbidden('访问被拒绝');
           }
-          final absolutePath = path.normalize(path.join(questionBankDir, decodedPath));
+          final absolutePath =
+              path.normalize(path.join(questionBankDir, decodedPath));
           if (!absolutePath.startsWith(path.normalize(questionBankDir))) {
             print('警告: 静态文件路径越界，已拒绝: $decodedPath');
             return Response.forbidden('访问被拒绝');
           }
           final file = File(absolutePath);
-          print('静态文件请求: $decodedPath -> $absolutePath, 存在: ${file.existsSync()}');
+          print(
+              '静态文件请求: $decodedPath -> $absolutePath, 存在: ${file.existsSync()}');
           if (file.existsSync()) {
             final contentType = _getContentType(decodedPath);
             final bytes = await file.readAsBytes();
@@ -2387,21 +2758,6 @@ class HttpServerService {
     print('活跃班级已设置: $className');
   }
 
-  /// 语义化版本比较
-  /// 返回: 1 表示 v1 > v2, -1 表示 v1 < v2, 0 表示相等
-  int _compareVersions(String v1, String v2) {
-    final parts1 = v1.split('.').map((e) => int.tryParse(e) ?? 0).toList();
-    final parts2 = v2.split('.').map((e) => int.tryParse(e) ?? 0).toList();
-    final maxLen = parts1.length > parts2.length ? parts1.length : parts2.length;
-    while (parts1.length < maxLen) parts1.add(0);
-    while (parts2.length < maxLen) parts2.add(0);
-    for (int i = 0; i < maxLen; i++) {
-      if (parts1[i] > parts2[i]) return 1;
-      if (parts1[i] < parts2[i]) return -1;
-    }
-    return 0;
-  }
-
   /// 从题库文件读取考试时间限制
   Future<int> _loadExamTimeLimitFromBank(String bankName) async {
     try {
@@ -2447,7 +2803,9 @@ class HttpServerService {
         if (!await file.exists()) continue;
         final content = await file.readAsString();
         final data = json.decode(content) as Map<String, dynamic>;
-        final students = (data['students'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+        final students = (data['students'] as List<dynamic>?)
+                ?.cast<Map<String, dynamic>>() ??
+            [];
         _studentCache[classId] = students;
         totalLoaded += students.length;
       }
@@ -2481,5 +2839,27 @@ class _Md5Sink implements Sink<Digest> {
 
   @override
   void close() {}
+}
+
+/// 学生端升级压缩包信息（来自升级目录扫描）
+class _UpdatePackageInfo {
+  final String fileName;
+  final int size;
+  final DateTime modified;
+
+  const _UpdatePackageInfo({
+    required this.fileName,
+    required this.size,
+    required this.modified,
+  });
+
+  /// 从文件名解析版本号：student_1.1.0.zip -> 1.1.0；解析不到返回空
+  static String parseVersionFromFileName(String fileName) {
+    final baseName = path.basenameWithoutExtension(fileName);
+    final match = RegExp(r'\d+(?:\.\d+)+').firstMatch(baseName);
+    return match?.group(0) ?? '';
+  }
+
+  String get version => parseVersionFromFileName(fileName);
 }
 
