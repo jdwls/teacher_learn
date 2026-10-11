@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async';import '../utils/app_logger.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as path;
@@ -92,7 +92,7 @@ class ServerService {
           existingData = json.decode(existingContent) as Map<String, dynamic>;
         } catch (e) {
           // 文件损坏或格式错误，使用空数据
-          print('读取班级 $classId 现有文件失败，使用新数据: $e');
+          AppLogger.log('读取班级 $classId 现有文件失败，使用新数据: $e');
         }
       }
 
@@ -160,7 +160,7 @@ class ServerService {
         flush: true,
       );
     } catch (e) {
-      print('保存班级 $classId 数据失败: $e');
+      AppLogger.log('保存班级 $classId 数据失败: $e');
     }
   }
 
@@ -169,7 +169,7 @@ class ServerService {
     try {
       // 如果内存中没有学生数据，不要覆盖文件
       if (_connectedStudentsMap.isEmpty) {
-        print('内存中无学生数据，跳过保存（防止覆盖已有文件）');
+        AppLogger.log('内存中无学生数据，跳过保存（防止覆盖已有文件）');
         return;
       }
 
@@ -200,9 +200,9 @@ class ServerService {
         await _saveStudentToClassFile(entry.key, entry.value);
       }
 
-      print('已保存 ${_connectedStudentsMap.length} 条学生记录到各班级文件');
+      AppLogger.log('已保存 ${_connectedStudentsMap.length} 条学生记录到各班级文件');
     } catch (e) {
-      print('保存学生记录失败: $e');
+      AppLogger.log('保存学生记录失败: $e');
     }
   }
 
@@ -218,7 +218,7 @@ class ServerService {
       // 启动心跳超时检测（每5秒检测一次）
       _startHeartbeatTimeoutCheck();
     } catch (e) {
-      print('服务器启动失败: $e');
+      AppLogger.log('服务器启动失败: $e');
     }
   }
 
@@ -247,7 +247,7 @@ class ServerService {
       if (conn.isOnline && now.difference(conn.lastHeartbeat) > timeout) {
         conn.isOnline = false;
         needsNotify = true;
-        print('学生 ${conn.student.name} 心跳超时，已设为离线');
+        AppLogger.log('学生 ${conn.student.name} 心跳超时，已设为离线');
       }
     }
 
@@ -261,7 +261,7 @@ class ServerService {
 
   void setTeacherActive() {
     _isTeacherActive = true;
-    print('教师端已激活');
+    AppLogger.log('教师端已激活');
   }
 
   // 重新加载学生数据
@@ -271,7 +271,7 @@ class ServerService {
 
   void setTeacherInactive() {
     _isTeacherActive = false;
-    print('教师端已停用');
+    AppLogger.log('教师端已停用');
   }
 
   bool get isTeacherActive => _isTeacherActive;
@@ -320,9 +320,9 @@ class ServerService {
         }
       }
 
-      print('已加载 ${_connectedStudentsMap.length} 条学生记录');
+      AppLogger.log('已加载 ${_connectedStudentsMap.length} 条学生记录');
     } catch (e) {
-      print('加载学生记录失败: $e');
+      AppLogger.log('加载学生记录失败: $e');
     }
   }
 
@@ -330,14 +330,14 @@ class ServerService {
   Future<void> _startSocketServer() async {
     try {
       _serverSocket = await ServerSocket.bind('0.0.0.0', _socketPort);
-      print('Socket服务器启动在端口 $_socketPort');
+      AppLogger.log('Socket服务器启动在端口 $_socketPort');
 
       _serverSocket!.listen((socket) {
         _activeSockets.add(socket);
         _handleSocketConnection(socket);
       });
     } catch (e) {
-      print('Socket服务器启动失败: $e');
+      AppLogger.log('Socket服务器启动失败: $e');
     }
   }
 
@@ -388,7 +388,7 @@ class ServerService {
           } catch (e) {
             // 忽略解析错误，记录日志（脱敏：仅显示消息长度，不打印原始内容）
             final msgLen = message.length;
-            print('JSON解析错误: $e, 消息长度: $msgLen 字符');
+            AppLogger.log('JSON解析错误: $e, 消息长度: $msgLen 字符');
           }
         }
       },
@@ -467,14 +467,14 @@ class ServerService {
               studentStatus: 'online',
               points: studentData['points'] ?? 0,
             );
-            print('自动添加学生到在线列表: ${student.name} (ID: $studentId)');
+            AppLogger.log('自动添加学生到在线列表: ${student.name} (ID: $studentId)');
             _debouncedNotify();
             return;
           }
         }
       }
     } catch (e) {
-      print('查找学生失败: $e');
+      AppLogger.log('查找学生失败: $e');
     }
   }
 
@@ -519,7 +519,7 @@ class ServerService {
       conn.isOnline = true;
       _debouncedSave();
       _debouncedNotify();
-      print('ServerService: 学生 $studentId 状态更新为 $status');
+      AppLogger.log('ServerService: 学生 $studentId 状态更新为 $status');
     }
   }
 
@@ -551,15 +551,15 @@ class ServerService {
       try {
         await _serverSocket!.close();
         _serverSocket = null;
-        print('ServerSocket 已关闭，端口 $_socketPort 已释放');
+        AppLogger.log('ServerSocket 已关闭，端口 $_socketPort 已释放');
       } catch (e) {
-        print('ServerSocket 关闭失败: $e');
+        AppLogger.log('ServerSocket 关闭失败: $e');
       }
     }
 
     // 强制保存所有未写入的数据
     await _forceSave();
-    print('服务器已停止，已关闭 $closedCount 个Socket连接');
+    AppLogger.log('服务器已停止，已关闭 $closedCount 个Socket连接');
   }
 
   void dispose() {

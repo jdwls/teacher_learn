@@ -35,6 +35,9 @@ migrate_working_dir/
 /information/
 /题库/
 /md/
+/test/
+/性能优化建议.md/
+/.vscode
 # Symbolication related
 app.*.symbols
 

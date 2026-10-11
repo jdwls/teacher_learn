@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';import '../utils/app_logger.dart';
 import 'package:provider/provider.dart';
 import '../providers/statistics_provider.dart';
 import '../providers/auth_provider.dart';
@@ -1598,7 +1598,7 @@ class _StatisticsPageState extends State<StatisticsPage>
         };
       }
     } catch (e) {
-      print('加载选项失败: $e');
+      AppLogger.log('加载选项失败: $e');
     }
     return null;
   }
@@ -2090,7 +2090,7 @@ class _StatisticsPageState extends State<StatisticsPage>
       final dt = DateTime.parse(isoTime);
       return '${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     } catch (e) {
-      print('时间格式化失败: $e');
+      AppLogger.log('时间格式化失败: $e');
       return isoTime;
     }
   }

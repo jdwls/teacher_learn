@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:convert';import '../utils/app_logger.dart';
 import 'dart:io';
 import '../utils/app_path.dart';
 
@@ -367,7 +367,7 @@ class QuestionBankService {
         }
         await tempFile.rename(jsonFile.path);
       } catch (e) {
-        print('保存题库JSON失败: $e');
+        AppLogger.log('保存题库JSON失败: $e');
         try {
           if (await tempFile.exists()) await tempFile.delete();
         } catch (_) {}
@@ -720,7 +720,7 @@ class QuestionBankService {
 
       return questions;
     } catch (e) {
-      print('加载操作题失败: $e');
+      AppLogger.log('加载操作题失败: $e');
       return [];
     }
   }

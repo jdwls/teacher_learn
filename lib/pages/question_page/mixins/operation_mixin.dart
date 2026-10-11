@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:io';import '../../../utils/app_logger.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/material.dart';
 import '../../../theme/app_theme.dart';
@@ -533,7 +533,7 @@ mixin OperationQuestionMixin on State {
           // 更新 filePath 为实际文件系统路径
           file.filePath = '题库/$selectedBank/操作题/$questionId/${file.fileName}';
         } catch (e) {
-          print('操作题文件保存失败: ${file.fileName}: $e');
+          AppLogger.log('操作题文件保存失败: ${file.fileName}: $e');
           fileSaveSuccess = false;
           break;
         }

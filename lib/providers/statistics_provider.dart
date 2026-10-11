@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:convert';import '../utils/app_logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -107,7 +107,7 @@ class StatisticsProvider extends ChangeNotifier {
         }
       }
     } catch (e) {
-      print('加载班级列表失败: $e');
+      AppLogger.log('加载班级列表失败: $e');
     }
   }
 
@@ -150,7 +150,7 @@ class StatisticsProvider extends ChangeNotifier {
       }
     } catch (e) {
       _error = '连接服务器失败: $e';
-      print('加载统计数据失败: $e');
+      AppLogger.log('加载统计数据失败: $e');
     }
 
     _isLoading = false;
@@ -493,7 +493,7 @@ class StatisticsProvider extends ChangeNotifier {
         }
       }
     } catch (e) {
-      print('加载学生详情失败: $e');
+      AppLogger.log('加载学生详情失败: $e');
     }
 
     _isLoadingDetail = false;

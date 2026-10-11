@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:io';import '../utils/app_logger.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
@@ -39,7 +39,7 @@ class ImageService {
       );
       return result?.files.firstOrNull;
     } catch (e) {
-      print('ImageService: 选择图片失败: $e');
+      AppLogger.log('ImageService: 选择图片失败: $e');
       return null;
     }
   }
@@ -89,7 +89,7 @@ class ImageService {
 
       final sourcePath = pickedFile.path;
       if (sourcePath == null || sourcePath.isEmpty) {
-        print('ImageService: 选择的图片没有可用路径');
+        AppLogger.log('ImageService: 选择的图片没有可用路径');
         return null;
       }
       final sourceFile = File(sourcePath);
@@ -98,7 +98,7 @@ class ImageService {
       // 返回相对路径
       return '$bankName/图片/$fileName';
     } catch (e) {
-      print('ImageService: 保存图片到题库失败: $e');
+      AppLogger.log('ImageService: 保存图片到题库失败: $e');
       return null;
     }
   }
@@ -110,19 +110,19 @@ class ImageService {
 
   /// 预览图片（用默认图片查看器打开）
   static Future<bool> previewImage(String fullPath) async {
-    print('ImageService.previewImage: 完整路径 = $fullPath');
-    print('ImageService.previewImage: 当前工作目录 = ${Directory.current.path}');
+    AppLogger.log('ImageService.previewImage: 完整路径 = $fullPath');
+    AppLogger.log('ImageService.previewImage: 当前工作目录 = ${Directory.current.path}');
 
     try {
       final file = File(fullPath);
 
       // 先检查文件是否存在
       if (!await file.exists()) {
-        print('ImageService.previewImage: 文件不存在');
+        AppLogger.log('ImageService.previewImage: 文件不存在');
         return false; // 文件不存在
       }
 
-      print('ImageService.previewImage: 文件存在，准备打开');
+      AppLogger.log('ImageService.previewImage: 文件存在，准备打开');
 
       // Windows上使用cmd打开图片
       // 使用start命令打开图片
@@ -133,7 +133,7 @@ class ImageService {
       );
       return result.exitCode == 0;
     } catch (e) {
-      print('ImageService: 预览图片失败 (path: $fullPath): $e');
+      AppLogger.log('ImageService: 预览图片失败 (path: $fullPath): $e');
       return false;
     }
   }
@@ -148,7 +148,7 @@ class ImageService {
       }
       return false;
     } catch (e) {
-      print('ImageService: 删除图片文件失败 (path: $fullPath): $e');
+      AppLogger.log('ImageService: 删除图片文件失败 (path: $fullPath): $e');
       return false;
     }
   }
@@ -160,7 +160,7 @@ class ImageService {
       final fullPath = getImageFullPath(relativePath);
       return await deleteImage(fullPath);
     } catch (e) {
-      print(
+      AppLogger.log(
           'ImageService: 删除题库图片失败 (bank: $bankName, path: $relativePath): $e');
       return false;
     }
@@ -176,7 +176,7 @@ class ImageService {
         await directory.create();
       }
     } catch (e) {
-      print('ImageService: 清理缓存失败: $e');
+      AppLogger.log('ImageService: 清理缓存失败: $e');
     }
   }
 
@@ -187,20 +187,20 @@ class ImageService {
     required String position,
     String? questionTitle,
   }) async {
-    print(
+    AppLogger.log(
         'ImageService: 开始复制图片 - cachePath: $cachePath, bankName: $bankName, position: $position');
 
     try {
       // 检查源文件是否存在
       final sourceFile = File(cachePath);
       if (!await sourceFile.exists()) {
-        print('ImageService: 源文件不存在 - $cachePath');
+        AppLogger.log('ImageService: 源文件不存在 - $cachePath');
         return null;
       }
 
       // 获取目标目录
       final imageDir = await getQuestionBankImageDir(bankName);
-      print('ImageService: 目标目录 - $imageDir');
+      AppLogger.log('ImageService: 目标目录 - $imageDir');
 
       // 生成文件名
       final extension = cachePath.split('.').last;
@@ -210,7 +210,7 @@ class ImageService {
         extension: extension,
       );
       final targetPath = '$imageDir/$fileName';
-      print('ImageService: 目标文件 - $targetPath');
+      AppLogger.log('ImageService: 目标文件 - $targetPath');
 
       // 复制文件
       await sourceFile.copy(targetPath);
@@ -218,14 +218,14 @@ class ImageService {
       // 验证文件是否复制成功
       final targetFile = File(targetPath);
       if (await targetFile.exists()) {
-        print('ImageService: 文件复制成功 - $targetPath');
+        AppLogger.log('ImageService: 文件复制成功 - $targetPath');
         return '$bankName/图片/$fileName';
       } else {
-        print('ImageService: 文件复制失败');
+        AppLogger.log('ImageService: 文件复制失败');
         return null;
       }
     } catch (e) {
-      print('ImageService: 复制图片时出错 - $e');
+      AppLogger.log('ImageService: 复制图片时出错 - $e');
       return null;
     }
   }
@@ -236,7 +236,7 @@ class ImageService {
       final fullPath = getImageFullPath(relativePath);
       return await File(fullPath).exists();
     } catch (e) {
-      print('ImageService: 检查图片是否存在失败 (path: $relativePath): $e');
+      AppLogger.log('ImageService: 检查图片是否存在失败 (path: $relativePath): $e');
       return false;
     }
   }

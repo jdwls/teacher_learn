@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:convert';import '../utils/app_logger.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -66,8 +66,14 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     super.dispose();
   }
 
-  void _loadClassData() {
-    _allClassIds = _httpService.getAllClassIds();
+  /// 【性能优化】改为异步加载：
+  /// 1. 先并行预热所有班级的学生缓存（不再在 build 内同步读盘）
+  /// 2. 班级目录扫描改用异步版本 getAllClassIdsAsync
+  Future<void> _loadClassData() async {
+    await _httpService.preloadAllClassCaches();
+    if (!mounted) return;
+    _allClassIds = await _httpService.getAllClassIdsAsync();
+    if (!mounted) return;
     final gradeSet = <String>{};
     for (final classId in _allClassIds) {
       final grade = _extractGrade(classId);
@@ -77,7 +83,9 @@ class _StudentManagementPageState extends State<StudentManagementPage>
 
     if (_grades.isNotEmpty) {
       _selectedGrade = _grades.first;
-      _updateClassList();
+      setState(() {
+        _updateClassList();
+      });
     }
   }
 
@@ -290,7 +298,8 @@ class _StudentManagementPageState extends State<StudentManagementPage>
               const SizedBox(width: 8),
               IconButton(
                 onPressed: () {
-                  setState(() => _loadClassData());
+                  setState(() {});
+                  _loadClassData();
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                         content: Text('已刷新'), backgroundColor: Colors.green),
@@ -582,10 +591,10 @@ class _StudentManagementPageState extends State<StudentManagementPage>
           json.decode(await tmp.readAsString());
           await tmp.rename(target.path);
         } else {
-          print('班级数据迁移：跳过合并（结构不匹配）$name');
+          AppLogger.log('班级数据迁移：跳过合并（结构不匹配）$name');
         }
       } catch (e) {
-        print('班级数据迁移失败 $name: $e');
+        AppLogger.log('班级数据迁移失败 $name: $e');
       }
     }
   }
@@ -623,7 +632,7 @@ class _StudentManagementPageState extends State<StudentManagementPage>
       try {
         await _migrateClassDataFiles(oldClassId, newClassId);
       } catch (e) {
-        print('班级数据迁移异常: $e');
+        AppLogger.log('班级数据迁移异常: $e');
       }
 
       // 先完整写入并确认新班级文件成功，再删除旧班级。
@@ -1811,7 +1820,7 @@ class _StudentManagementPageState extends State<StudentManagementPage>
       await file
           .writeAsString(const JsonEncoder.withIndent('  ').convert(config));
     } catch (e) {
-      print('保存积分兑换配置失败: $e');
+      AppLogger.log('保存积分兑换配置失败: $e');
     }
     _loadPointsExchangeData();
   }

@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:io';import '../utils/app_logger.dart';
 import 'package:path/path.dart' as path;
 
 /// 应用路径工具类
@@ -39,9 +39,9 @@ class AppPath {
       _projectRoot ??= Directory.current.path;
     }
 
-    print('应用根目录: $_projectRoot');
-    print('  exe路径: $exePath');
-    print('  工作目录: ${Directory.current.path}');
+    AppLogger.log('应用根目录: $_projectRoot');
+    AppLogger.log('  exe路径: $exePath');
+    AppLogger.log('  工作目录: ${Directory.current.path}');
 
     return _projectRoot!;
   }
@@ -66,14 +66,14 @@ class AppPath {
     for (final dir in [primary, secondary]) {
       if (Directory(dir).existsSync()) {
         _studentOnlineUpdateDir = dir;
-        print('学生端升级包目录: $_studentOnlineUpdateDir');
+        AppLogger.log('学生端升级包目录: $_studentOnlineUpdateDir');
         return dir;
       }
     }
     // 两处都不存在（如首次部署）：用主候选并自动创建
     Directory(primary).createSync(recursive: true);
     _studentOnlineUpdateDir = primary;
-    print('学生端升级包目录不存在，已自动创建: $primary');
+    AppLogger.log('学生端升级包目录不存在，已自动创建: $primary');
     return primary;
   }
 }

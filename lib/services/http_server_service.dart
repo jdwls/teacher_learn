@@ -1,6 +1,7 @@
-import 'dart:async';
+import 'dart:async';import '../utils/app_logger.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
@@ -78,7 +79,7 @@ class HttpServerService {
   /// 如果熔断器打开，返回false并拒绝操作
   bool _canPerformIO() {
     if (_circuitBreakerOpen) {
-      print('【Y修复】熔断器已打开，拒绝I/O操作，等待恢复...');
+      AppLogger.log('【Y修复】熔断器已打开，拒绝I/O操作，等待恢复...');
       return false;
     }
     return true;
@@ -88,7 +89,7 @@ class HttpServerService {
   void _recordIOSuccess() {
     if (_consecutiveFailures > 0) {
       _consecutiveFailures = 0;
-      print('【Y修复】I/O操作成功，熔断器重置');
+      AppLogger.log('【Y修复】I/O操作成功，熔断器重置');
     }
   }
 
@@ -98,14 +99,14 @@ class HttpServerService {
     if (_consecutiveFailures >= _circuitBreakerThreshold &&
         !_circuitBreakerOpen) {
       _circuitBreakerOpen = true;
-      print('【Y修复】熔断器已打开！连续失败次数: $_consecutiveFailures');
+      AppLogger.log('【Y修复】熔断器已打开！连续失败次数: $_consecutiveFailures');
       // 30秒后尝试恢复
       _circuitBreakerTimer?.cancel();
       _circuitBreakerTimer =
           Timer(const Duration(seconds: _circuitBreakerResetSeconds), () {
         _circuitBreakerOpen = false;
         _consecutiveFailures = 0;
-        print('【Y修复】熔断器恢复，重新允许I/O操作');
+        AppLogger.log('【Y修复】熔断器恢复，重新允许I/O操作');
       });
     }
   }
@@ -182,16 +183,16 @@ class HttpServerService {
             (data['file_name'] ?? '').toString().trim();
       } else {
         await _saveOnlineUpdateConfig();
-        print('在线升级配置文件不存在，已创建默认配置');
+        AppLogger.log('在线升级配置文件不存在，已创建默认配置');
       }
     } catch (e) {
-      print('加载在线升级配置失败: $e');
+      AppLogger.log('加载在线升级配置失败: $e');
     }
 
     // 配置里的 file_name 已失效（包被删除/改名）→ 回落到目录最新包
     if (_onlinePackageName.isNotEmpty &&
         !_onlinePackageCache.containsKey(_onlinePackageName)) {
-      print('配置的升级包不存在: $_onlinePackageName，自动切到目录最新包');
+      AppLogger.log('配置的升级包不存在: $_onlinePackageName，自动切到目录最新包');
       _onlinePackageName = '';
     }
     _onlinePackageName = _resolvePackageName(preferred: _onlinePackageName);
@@ -232,7 +233,7 @@ class HttpServerService {
       }
       return result;
     } catch (e) {
-      print('扫描升级包目录失败: $e');
+      AppLogger.log('扫描升级包目录失败: $e');
       return const {};
     }
   }
@@ -308,7 +309,7 @@ class HttpServerService {
       await tempFile.rename(file.path);
       return true;
     } catch (e) {
-      print('保存在线升级配置失败: $e');
+      AppLogger.log('保存在线升级配置失败: $e');
       return false;
     }
   }
@@ -357,7 +358,7 @@ class HttpServerService {
       final mapping = data['students'] as Map<String, dynamic>? ?? {};
       _studentVersions = mapping.map((k, v) => MapEntry(k, v?.toString() ?? ''));
     } catch (e) {
-      print('读取学生版本汇总失败: $e');
+      AppLogger.log('读取学生版本汇总失败: $e');
     }
   }
 
@@ -379,7 +380,7 @@ class HttpServerService {
       json.decode(await tempFile.readAsString());
       await tempFile.rename(file.path);
     } catch (e) {
-      print('保存学生版本汇总失败: $e');
+      AppLogger.log('保存学生版本汇总失败: $e');
     }
   }
 
@@ -441,13 +442,13 @@ class HttpServerService {
         final content = await file.readAsString();
         final data = json.decode(content) as Map<String, dynamic>;
         pointsExchangeConfig = data;
-        print('已从本地加载积分兑换配置: $pointsExchangeConfigPath');
+        AppLogger.log('已从本地加载积分兑换配置: $pointsExchangeConfigPath');
       } else {
         await _savePointsExchangeConfig();
-        print('积分兑换配置文件不存在，已创建默认配置');
+        AppLogger.log('积分兑换配置文件不存在，已创建默认配置');
       }
     } catch (e) {
-      print('加载积分兑换配置失败: $e');
+      AppLogger.log('加载积分兑换配置失败: $e');
     }
   }
 
@@ -464,10 +465,10 @@ class HttpServerService {
       await tempFile.writeAsString(jsonString, flush: true);
       json.decode(await tempFile.readAsString());
       await tempFile.rename(file.path);
-      print('已保存积分兑换配置到本地: $pointsExchangeConfigPath');
+      AppLogger.log('已保存积分兑换配置到本地: $pointsExchangeConfigPath');
       return true;
     } catch (e) {
-      print('保存积分兑换配置失败: $e');
+      AppLogger.log('保存积分兑换配置失败: $e');
       return false;
     }
   }
@@ -531,13 +532,13 @@ class HttpServerService {
         if (data.containsKey('english') && data['english'] is Map) {
           typingConfig['english'] = data['english'];
         }
-        print('已从本地加载打字配置: $_typingConfigPath');
+        AppLogger.log('已从本地加载打字配置: $_typingConfigPath');
       } else {
         await _saveTypingConfig();
-        print('打字配置文件不存在，已创建默认配置');
+        AppLogger.log('打字配置文件不存在，已创建默认配置');
       }
     } catch (e) {
-      print('加载打字配置失败: $e');
+      AppLogger.log('加载打字配置失败: $e');
     }
   }
 
@@ -565,10 +566,10 @@ class HttpServerService {
       }
       await tempFile.rename(file.path);
 
-      print('已保存打字配置到本地: $_typingConfigPath');
+      AppLogger.log('已保存打字配置到本地: $_typingConfigPath');
       return true;
     } catch (e) {
-      print('保存打字配置失败: $e');
+      AppLogger.log('保存打字配置失败: $e');
       // 清理临时文件
       try {
         final tempFile = File('${_typingConfigPath}.tmp');
@@ -615,10 +616,10 @@ class HttpServerService {
         // 等待前一个写入完成；超时不能强制移除锁，否则会并发读改写同一文件。
         await previous.future.timeout(_lockTimeout);
       } on TimeoutException {
-        print('警告: 等待成绩文件锁超时，取消本次写入: $lockKey');
+        AppLogger.log('警告: 等待成绩文件锁超时，取消本次写入: $lockKey');
         return false;
       } catch (e) {
-        print('等待成绩文件锁失败，取消本次写入: $e');
+        AppLogger.log('等待成绩文件锁失败，取消本次写入: $e');
         return false;
       }
     }
@@ -632,7 +633,7 @@ class HttpServerService {
       updater(data);
       return await _writeScoreFile(classId, fileName, data);
     } catch (e) {
-      print('成绩文件操作失败: $e');
+      AppLogger.log('成绩文件操作失败: $e');
       return false;
     } finally {
       if (!completer.isCompleted) completer.complete();
@@ -657,7 +658,7 @@ class HttpServerService {
   Future<bool> _writeScoreFile(
       String classId, String fileName, Map<String, dynamic> data) async {
     if (!_canPerformIO()) {
-      print('【Y修复】熔断器打开中，跳过成绩文件写入');
+      AppLogger.log('【Y修复】熔断器打开中，跳过成绩文件写入');
       return false;
     }
     try {
@@ -677,7 +678,7 @@ class HttpServerService {
       return true;
     } catch (e) {
       _recordIOFailure();
-      print('写入成绩文件失败: $e');
+      AppLogger.log('写入成绩文件失败: $e');
       return false;
     }
   }
@@ -727,10 +728,10 @@ class HttpServerService {
         _studentCache[classId] = students;
         _dirtyClasses.add(classId);
         _scheduleFlush();
-        print('同步积分: $studentId 总积分=$totalPoints');
+        AppLogger.log('同步积分: $studentId 总积分=$totalPoints');
       }
     } catch (e) {
-      print('同步积分失败: $e');
+      AppLogger.log('同步积分失败: $e');
     }
   }
 
@@ -745,9 +746,9 @@ class HttpServerService {
           _todayPointsCache[studentId] = 0;
         }
       }
-      print('学生积分缓存已初始化，共 ${_studentPointsCache.length} 条');
+      AppLogger.log('学生积分缓存已初始化，共 ${_studentPointsCache.length} 条');
     } catch (e) {
-      print('初始化学生积分缓存失败: $e');
+      AppLogger.log('初始化学生积分缓存失败: $e');
     }
   }
 
@@ -791,7 +792,7 @@ class HttpServerService {
       requestHandler: (Request request) {
         final contentLength = request.contentLength;
         if (contentLength != null && contentLength > _maxBodySize) {
-          print('警告: 请求体过大 ($contentLength bytes)，已拒绝');
+          AppLogger.log('警告: 请求体过大 ($contentLength bytes)，已拒绝');
           return Response(413,
               body: json.encode({'error': '请求体过大，最大支持 10MB'}),
               headers: {'Content-Type': 'application/json; charset=utf-8'});
@@ -844,7 +845,10 @@ class HttpServerService {
     final file = File(bankPath);
     if (await file.exists()) {
       final content = await file.readAsString();
-      final data = json.decode(content) as Map<String, dynamic>;
+      // 【性能优化】大题库 JSON 解析放到独立 isolate，
+      // 避免解析期间阻塞 UI 线程（学生端并发请求高峰时防止掉帧）。
+      final data = await Isolate.run(
+          () => jsonDecode(content) as Map<String, dynamic>);
       _questionBankCache[bankName] = data;
       return data;
     }
@@ -889,7 +893,7 @@ class HttpServerService {
       _studentCache[classId] = students;
       return true;
     } catch (e) {
-      print('重新加载班级 $classId 学生数据失败: $e');
+      AppLogger.log('重新加载班级 $classId 学生数据失败: $e');
       // 读取失败时清掉缓存，让后续读取按需重载，避免继续使用过期数据
       _studentCache.remove(classId);
       _enforceCacheLimit(_studentCache, _maxStudentCacheSize);
@@ -913,7 +917,7 @@ class HttpServerService {
     while (cache.length > maxSize) {
       final firstKey = cache.keys.first;
       cache.remove(firstKey);
-      print('缓存超过上限(${maxSize})，移除: $firstKey');
+      AppLogger.log('缓存超过上限(${maxSize})，移除: $firstKey');
     }
   }
 
@@ -961,7 +965,7 @@ class HttpServerService {
       _studentCache[classId] = students;
       return students;
     } catch (e) {
-      print('同步加载班级 $classId 学生数据失败: $e');
+      AppLogger.log('同步加载班级 $classId 学生数据失败: $e');
       return [];
     }
   }
@@ -984,6 +988,15 @@ class HttpServerService {
     }
   }
 
+  /// 【性能优化】预热所有班级的学生缓存。
+  /// 并行异步读取每个班级的 JSON，填充 _studentCache，
+  /// 让 UI（如学生管理页 build 内）随后的同步 loadClassStudents 全部命中内存缓存，
+  /// 避免在界面绘制过程中出现同步磁盘 I/O 造成卡顿。
+  Future<void> preloadAllClassCaches() async {
+    final classes = await getAllClassIdsAsync();
+    await Future.wait(classes.map(loadClassStudentsAsync));
+  }
+
   Future<bool> replaceClassStudents(
       String classId, List<Map<String, dynamic>> students) async {
     try {
@@ -1004,7 +1017,7 @@ class HttpServerService {
       _dirtyClasses.remove(classId);
       return true;
     } catch (e) {
-      print('替换班级 $classId 学生数据失败: $e');
+      AppLogger.log('替换班级 $classId 学生数据失败: $e');
       return false;
     }
   }
@@ -1025,7 +1038,7 @@ class HttpServerService {
       _dirtyClasses.add(classId);
       _scheduleFlush();
     } catch (e) {
-      print('保存学生到班级 $classId 失败: $e');
+      AppLogger.log('保存学生到班级 $classId 失败: $e');
     }
   }
 
@@ -1057,7 +1070,7 @@ class HttpServerService {
             final existingContent = await file.readAsString();
             existingData = json.decode(existingContent) as Map<String, dynamic>;
           } catch (e) {
-            print('读取班级 $classId 现有文件失败，使用缓存数据: $e');
+            AppLogger.log('读取班级 $classId 现有文件失败，使用缓存数据: $e');
           }
         }
 
@@ -1119,7 +1132,7 @@ class HttpServerService {
           json.decode(await tempFile.readAsString());
           await tempFile.rename(filePath);
         } catch (e) {
-          print('刷新班级 $classId 数据失败: $e');
+          AppLogger.log('刷新班级 $classId 数据失败: $e');
           try {
             if (await tempFile.exists()) await tempFile.delete();
           } catch (_) {}
@@ -1127,7 +1140,7 @@ class HttpServerService {
           continue;
         }
       } catch (e) {
-        print('刷新班级 $classId 数据失败: $e');
+        AppLogger.log('刷新班级 $classId 数据失败: $e');
         _dirtyClasses.add(classId);
       }
     }
@@ -1135,7 +1148,7 @@ class HttpServerService {
       _flushRetryCount++;
       _scheduleFlush();
     } else if (_dirtyClasses.isNotEmpty) {
-      print('警告: 脏数据刷新失败已达上限(${_flushRetryCount}次)，尝试紧急保存...');
+      AppLogger.log('警告: 脏数据刷新失败已达上限(${_flushRetryCount}次)，尝试紧急保存...');
       for (final classId in _dirtyClasses) {
         try {
           final students = _studentCache[classId] ?? [];
@@ -1152,9 +1165,9 @@ class HttpServerService {
               const JsonEncoder.withIndent('  ').convert(data),
               flush: true);
           tempEmergency.renameSync(emergencyFile.path);
-          print('紧急保存班级 $classId 数据到: ${emergencyFile.path}');
+          AppLogger.log('紧急保存班级 $classId 数据到: ${emergencyFile.path}');
         } catch (e) {
-          print('紧急保存失败: $e');
+          AppLogger.log('紧急保存失败: $e');
         }
       }
       _dirtyClasses.clear();
@@ -1182,14 +1195,18 @@ class HttpServerService {
     // 【热更新】查找前强制重读磁盘最新名单，确保教师端保存/删除学生立即生效
     await refreshClassFromDisk(_activeClass);
     final students = await loadClassStudentsAsync(_activeClass);
+    // 电脑名按忽略大小写比较（Windows 主机名可能存在大小写差异，之前精确匹配会导致设备匹配失败，学生端无法自动登录）
+    String normName(String? v) => (v ?? '').trim().toLowerCase();
+    final nComputerName = normName(computerName);
+    // 允许 DHCP 更换 IP。
     for (final s in students) {
-      if (s['computer_name'] == computerName && s['ip'] == ip) return s;
+      final sIp = (s['ip'] ?? '').toString().trim();
+      if (normName(s['computer_name'] ?? '') == normName(computerName) && sIp == ip.trim()) return s;
     }
 
-    // 允许 DHCP 更换 IP，但仍只在活跃班级内按电脑名匹配。
-    if (computerName.isNotEmpty) {
+    if (nComputerName.isNotEmpty) {
       for (final s in students) {
-        if (s['computer_name'] == computerName) return s;
+        if (normName(s['computer_name'] ?? '') == normName(computerName)) return s;
       }
     }
 
@@ -1236,9 +1253,9 @@ class HttpServerService {
     // 【修复】启动时预填充 _studentCache，避免登录时找不到已有学生
     await _preloadStudentCache();
 
-    print('启动 HTTP API 服务器...');
-    print('题库目录: $questionBankDir');
-    print('学生数据目录: $_informationRoot');
+    AppLogger.log('启动 HTTP API 服务器...');
+    AppLogger.log('题库目录: $questionBankDir');
+    AppLogger.log('学生数据目录: $_informationRoot');
 
     final router = Router();
 
@@ -1372,7 +1389,7 @@ class HttpServerService {
           'last_login': DateTime.now().toIso8601String(),
         };
         await saveStudentToClass(classId, student);
-        print('学生注册成功: $name (班级: $classId)');
+        AppLogger.log('学生注册成功: $name (班级: $classId)');
         return jsonResponse({
           'success': true,
           'data': {
@@ -1453,7 +1470,7 @@ class HttpServerService {
             status: 503,
           );
         }
-        print('打字配置已更新: $typingConfig');
+        AppLogger.log('打字配置已更新: $typingConfig');
         return jsonResponse({'success': true, 'data': typingConfig});
       } catch (e) {
         return jsonResponse({'success': false, 'error': '更新配置失败: $e'},
@@ -1464,13 +1481,13 @@ class HttpServerService {
     // 教师激活/停用控制
     router.post('/api/teacher/activate', (Request request) {
       _isTeacherActive = true;
-      print('教师端已激活（通过 API）');
+      AppLogger.log('教师端已激活（通过 API）');
       return jsonResponse({'success': true, 'active': true});
     });
 
     router.post('/api/teacher/deactivate', (Request request) {
       _isTeacherActive = false;
-      print('教师端已停用（通过 API）');
+      AppLogger.log('教师端已停用（通过 API）');
       return jsonResponse({'success': true, 'active': false});
     });
 
@@ -1488,7 +1505,7 @@ class HttpServerService {
         _activeClass = (data['class_id'] as String?) ?? '初一01班';
         // 【热更新】设置活跃班级的同时立即从磁盘载入最新名单，后续登录直接命中新数据
         await refreshClassFromDisk(_activeClass);
-        print('设置活跃班级: $_activeClass');
+        AppLogger.log('设置活跃班级: $_activeClass');
         return jsonResponse({'success': true, 'class_id': _activeClass});
       } catch (e) {
         return jsonResponse({'success': false, 'error': '设置失败: $e'},
@@ -1537,7 +1554,7 @@ class HttpServerService {
         }
 
         clearQuestionBankCache();
-        print(
+        AppLogger.log(
             '激活题库: $_activeBank, 考试时间: $_examTimeLimit 分钟, 提前交卷: $_earlySubmitMinutes 分钟');
         return jsonResponse({
           'success': true,
@@ -1575,7 +1592,7 @@ class HttpServerService {
         clearQuestionBankCache();
         // 【热更新】同步班级时立即从磁盘载入最新名单，后续登录/自动登录直接使用
         await refreshClassFromDisk(classId);
-        print('同步配置: 班级=$_activeClass, 题库=$_activeBank');
+        AppLogger.log('同步配置: 班级=$_activeClass, 题库=$_activeBank');
         return jsonResponse({
           'success': true,
           'class_id': _activeClass,
@@ -1596,10 +1613,10 @@ class HttpServerService {
         final data = json.decode(body) as Map<String, dynamic>;
         final bankName = data['bank'] as String?;
 
-        print('收到同步请求: bankName=$bankName');
+        AppLogger.log('收到同步请求: bankName=$bankName');
 
         if (bankName == null || bankName.isEmpty) {
-          print('同步失败: 缺少题库名称');
+          AppLogger.log('同步失败: 缺少题库名称');
           return jsonResponse({'success': false, 'error': '缺少题库名称'},
               status: 400);
         }
@@ -1607,7 +1624,7 @@ class HttpServerService {
         if (bankName.contains('..') ||
             bankName.contains('/') ||
             bankName.contains('\\')) {
-          print('同步失败: 题库名称包含非法路径字符, bankName=$bankName');
+          AppLogger.log('同步失败: 题库名称包含非法路径字符, bankName=$bankName');
           return jsonResponse({
             'success': false,
             'error_code': 'invalid_bank_name',
@@ -1619,7 +1636,7 @@ class HttpServerService {
         final bankPath = path.join(questionBankDir, bankName, '题库.json');
         final bankFile = File(bankPath);
         if (!await bankFile.exists()) {
-          print('同步失败: 题库不存在, path=$bankPath');
+          AppLogger.log('同步失败: 题库不存在, path=$bankPath');
           return jsonResponse({'success': false, 'error': '题库不存在'},
               status: 404);
         }
@@ -1695,7 +1712,7 @@ class HttpServerService {
           }
         }
 
-        print('同步题库文件: $bankName, 操作题文件数: ${operationFiles.length}');
+        AppLogger.log('同步题库文件: $bankName, 操作题文件数: ${operationFiles.length}');
 
         return jsonResponse({
           'success': true,
@@ -1704,7 +1721,7 @@ class HttpServerService {
           'operation_files': operationFiles,
         });
       } catch (e) {
-        print('同步题库文件失败: $e');
+        AppLogger.log('同步题库文件失败: $e');
         return jsonResponse({'success': false, 'error': '同步失败: $e'},
             status: 500);
       }
@@ -1731,10 +1748,10 @@ class HttpServerService {
         (Request request, String bankName) async {
       // 【修复】对 bankName 进行 URL 解码，确保中文字符和特殊字符正确处理
       final decodedBankName = Uri.decodeComponent(bankName);
-      print('获取题库内容: $bankName -> 解码后: $decodedBankName');
+      AppLogger.log('获取题库内容: $bankName -> 解码后: $decodedBankName');
       final data = await loadQuestionBank(decodedBankName);
       if (data == null) {
-        print(
+        AppLogger.log(
             '题库文件不存在: ${path.join(questionBankDir, decodedBankName, '题库.json')}');
         return jsonResponse({'success': false, 'error': '题库不存在'}, status: 404);
       }
@@ -1857,7 +1874,7 @@ class HttpServerService {
           'register_time': DateTime.now().toIso8601String(),
         };
         await saveStudentToClass(classId, student);
-        print('学生已注册到班级 $classId: ${student['name']}');
+        AppLogger.log('学生已注册到班级 $classId: ${student['name']}');
         return jsonResponse(
             {'success': true, 'message': '注册成功', 'student': student});
       } catch (e) {
@@ -2006,7 +2023,7 @@ class HttpServerService {
         // 返回教师端权威积分值，供学生端同步
         final totalPoints = _studentPointsCache[studentId] ?? 0;
 
-        print('答卷已保存: $studentName - $bankName - 得分$score');
+        AppLogger.log('答卷已保存: $studentName - $bankName - 得分$score');
         return jsonResponse({
           'success': true,
           'message': '提交成功',
@@ -2078,7 +2095,7 @@ class HttpServerService {
           await _syncStudentTotalPoints(resolvedClassId, studentId);
         }
 
-        print('小测成绩已保存: $studentName - $examName - 得分$score');
+        AppLogger.log('小测成绩已保存: $studentName - $examName - 得分$score');
         return jsonResponse({'success': true});
       } catch (e) {
         return jsonResponse({'success': false, 'error': '保存小测成绩失败: $e'},
@@ -2171,7 +2188,7 @@ class HttpServerService {
         final totalPoints = _studentPointsCache[studentId] ?? 0;
 
         final typeName = type == 'chinese' ? '中文打字' : '英文打字';
-        print('打字成绩已保存: $studentName - $typeName - 得分$score');
+        AppLogger.log('打字成绩已保存: $studentName - $typeName - 得分$score');
         return jsonResponse({
           'success': true,
           'total_points': totalPoints,
@@ -2225,7 +2242,7 @@ class HttpServerService {
               status: 503);
         }
 
-        print('积分变动已保存: $studentName +$points');
+        AppLogger.log('积分变动已保存: $studentName +$points');
         return jsonResponse({'success': true});
       } catch (e) {
         return jsonResponse({'success': false, 'error': '保存积分变动失败: $e'},
@@ -2238,7 +2255,7 @@ class HttpServerService {
         (Request request, String classId) async {
       try {
         final decodedClassId = Uri.decodeComponent(classId);
-        print('获取成绩汇总: $classId -> $decodedClassId');
+        AppLogger.log('获取成绩汇总: $classId -> $decodedClassId');
         final examData =
             await _readScoreFileAsync(decodedClassId, '小测成绩表.json');
         final typingData =
@@ -2346,7 +2363,7 @@ class HttpServerService {
             return jsonResponse({'success': false, 'error': '保存积分兑换配置失败'},
                 status: 500);
           }
-          print('积分兑换配置已更新');
+          AppLogger.log('积分兑换配置已更新');
           return jsonResponse({'success': true, 'data': pointsExchangeConfig});
         } catch (e) {
           return jsonResponse({'success': false, 'error': '更新积分兑换配置失败: $e'},
@@ -2482,7 +2499,7 @@ class HttpServerService {
             await _flushDirtyClasses();
           } catch (flushError) {
             // 班级学生文件写入失败：回滚积分配置和内存状态
-            print('警告: 班级学生文件写入失败，回滚兑换操作: $flushError');
+            AppLogger.log('警告: 班级学生文件写入失败，回滚兑换操作: $flushError');
             studentData['points'] = previousStudentPoints;
             if (sIndex != -1) {
               students[sIndex]['points'] = previousStudentPoints;
@@ -2496,7 +2513,7 @@ class HttpServerService {
             try {
               await _savePointsExchangeConfig();
             } catch (e) {
-              print('回滚兑换配置失败: $e');
+              AppLogger.log('回滚兑换配置失败: $e');
             }
             return jsonResponse(
                 {'success': false, 'error': '学生数据更新失败，兑换已回滚，请重试'},
@@ -2506,7 +2523,7 @@ class HttpServerService {
           // 更新积分缓存
           _studentPointsCache[studentId] = currentPoints - pointsCost;
 
-          print('学生 $studentName 兑换商品 ${item['name']}，消耗 $pointsCost 积分');
+          AppLogger.log('学生 $studentName 兑换商品 ${item['name']}，消耗 $pointsCost 积分');
           return jsonResponse({
             'success': true,
             'message': '兑换成功',
@@ -2698,17 +2715,17 @@ class HttpServerService {
           // 安全检查：拒绝包含路径遍历的请求
           // 不能仅用 replaceAll('..', '')，因为 "....//" 替换后变成 "../"
           if (decodedPath.contains('..')) {
-            print('警告: 静态文件路径包含遍历字符，已拒绝: $decodedPath');
+            AppLogger.log('警告: 静态文件路径包含遍历字符，已拒绝: $decodedPath');
             return Response.forbidden('访问被拒绝');
           }
           final absolutePath =
               path.normalize(path.join(questionBankDir, decodedPath));
           if (!absolutePath.startsWith(path.normalize(questionBankDir))) {
-            print('警告: 静态文件路径越界，已拒绝: $decodedPath');
+            AppLogger.log('警告: 静态文件路径越界，已拒绝: $decodedPath');
             return Response.forbidden('访问被拒绝');
           }
           final file = File(absolutePath);
-          print(
+          AppLogger.log(
               '静态文件请求: $decodedPath -> $absolutePath, 存在: ${file.existsSync()}');
           if (file.existsSync()) {
             final contentType = _getContentType(decodedPath);
@@ -2729,8 +2746,8 @@ class HttpServerService {
         .addHandler(router.call);
 
     _server = await shelf_io.serve(handler, '0.0.0.0', port);
-    print('HTTP API 服务器已启动: http://localhost:${_server!.port}');
-    print('静态文件: http://localhost:${_server!.port}/files/');
+    AppLogger.log('HTTP API 服务器已启动: http://localhost:${_server!.port}');
+    AppLogger.log('静态文件: http://localhost:${_server!.port}/files/');
   }
 
   String _getContentType(String filePath) {
@@ -2763,7 +2780,7 @@ class HttpServerService {
       await _flushAllDirty();
       await _server!.close(force: true);
       _server = null;
-      print('HTTP API 服务器已停止');
+      AppLogger.log('HTTP API 服务器已停止');
     }
   }
 
@@ -2776,9 +2793,9 @@ class HttpServerService {
       try {
         await _server!.close(force: true);
         _server = null;
-        print('HttpServerService: HTTP 服务器已关闭');
+        AppLogger.log('HttpServerService: HTTP 服务器已关闭');
       } catch (e) {
-        print('HttpServerService: 关闭 HTTP 服务器失败: $e');
+        AppLogger.log('HttpServerService: 关闭 HTTP 服务器失败: $e');
       }
     }
     await _flushAllDirty();
@@ -2789,19 +2806,19 @@ class HttpServerService {
     _todayPointsCache.clear();
     _dirtyClasses.clear();
     _scoreFileLocks.clear();
-    print('HttpServerService 已释放');
+    AppLogger.log('HttpServerService 已释放');
   }
 
   /// 设置教师激活状态
   void setTeacherActive(bool active) {
     _isTeacherActive = active;
-    print(active ? '教师端已激活' : '教师端已停用');
+    AppLogger.log(active ? '教师端已激活' : '教师端已停用');
   }
 
   /// 设置活跃班级（内部方法，供 main.dart 直接调用，避免 HTTP 回环）
   void setActiveClass(String className) {
     _activeClass = className;
-    print('活跃班级已设置: $className');
+    AppLogger.log('活跃班级已设置: $className');
     // 【热更新】切换/同步活跃班级时，立即从磁盘载入最新名单（异步，不阻塞调用方）
     unawaited(refreshClassFromDisk(className));
   }
@@ -2818,7 +2835,7 @@ class HttpServerService {
       final data = json.decode(content) as Map<String, dynamic>;
       return data['examTimeLimit'] as int? ?? 30;
     } catch (e) {
-      print('读取题库考试时间限制失败: $e');
+      AppLogger.log('读取题库考试时间限制失败: $e');
       return 30; // 默认30分钟
     }
   }
@@ -2835,7 +2852,7 @@ class HttpServerService {
       final data = json.decode(content) as Map<String, dynamic>;
       return data['earlySubmitMinutes'] as int? ?? 25;
     } catch (e) {
-      print('读取题库提前交卷时间失败: $e');
+      AppLogger.log('读取题库提前交卷时间失败: $e');
       return 25; // 默认25分钟
     }
   }
@@ -2854,7 +2871,7 @@ class HttpServerService {
                   ?.cast<Map<String, dynamic>>() ??
               [];
           _studentCache[_activeClass] = students;
-          print('已预加载活跃班级 $_activeClass：${students.length} 名学生');
+          AppLogger.log('已预加载活跃班级 $_activeClass：${students.length} 名学生');
         }
       }
 
@@ -2871,13 +2888,13 @@ class HttpServerService {
             if (idNum > maxId) maxId = idNum;
           }
         } catch (e) {
-          print('扫描班级 $classId 学生ID失败: $e');
+          AppLogger.log('扫描班级 $classId 学生ID失败: $e');
         }
       }
       _nextStudentId = maxId + 1;
-      print('学生ID自增计数器已初始化: 起始值=$_nextStudentId (最大现有ID=$maxId)');
+      AppLogger.log('学生ID自增计数器已初始化: 起始值=$_nextStudentId (最大现有ID=$maxId)');
     } catch (e) {
-      print('预加载学生缓存失败: $e');
+      AppLogger.log('预加载学生缓存失败: $e');
     }
   }
 }

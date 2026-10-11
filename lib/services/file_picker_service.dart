@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:io';import '../utils/app_logger.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:uuid/uuid.dart';
 
@@ -80,7 +80,7 @@ class FilePickerService {
         fileSize: fileSize,
       );
     } catch (e) {
-      print('选择文件失败: $e');
+      AppLogger.log('选择文件失败: $e');
       return null;
     }
   }
@@ -121,7 +121,7 @@ class FilePickerService {
 
       return results;
     } catch (e) {
-      print('选择文件失败: $e');
+      AppLogger.log('选择文件失败: $e');
       return [];
     }
   }
@@ -135,7 +135,7 @@ class FilePickerService {
       }
       return await file.readAsString();
     } catch (e) {
-      print('读取文件失败: $e');
+      AppLogger.log('读取文件失败: $e');
       return null;
     }
   }
@@ -161,7 +161,7 @@ class FilePickerService {
         lines: lines,
       );
     } catch (e) {
-      print('获取文件信息失败: $e');
+      AppLogger.log('获取文件信息失败: $e');
       return null;
     }
   }
@@ -225,7 +225,7 @@ class FilePickerService {
       final lineCount = content.split('\n').length;
       final fileSize = file.size;
 
-      print('文件已缓存到: $cachePath');
+      AppLogger.log('文件已缓存到: $cachePath');
 
       return FilePickResult(
         filePath: sourcePath,
@@ -236,7 +236,7 @@ class FilePickerService {
         cachePath: cachePath,
       );
     } catch (e) {
-      print('选择并缓存文件失败: $e');
+      AppLogger.log('选择并缓存文件失败: $e');
       return null;
     }
   }
@@ -246,12 +246,12 @@ class FilePickerService {
     try {
       final file = File(cachePath);
       if (!await file.exists()) {
-        print('缓存文件不存在: $cachePath');
+        AppLogger.log('缓存文件不存在: $cachePath');
         return null;
       }
       return await file.readAsString();
     } catch (e) {
-      print('读取缓存文件失败: $e');
+      AppLogger.log('读取缓存文件失败: $e');
       return null;
     }
   }
@@ -262,11 +262,11 @@ class FilePickerService {
       final cacheDir = Directory(getOperationCacheDir());
       if (await cacheDir.exists()) {
         await cacheDir.delete(recursive: true);
-        print('操作题缓存已清理');
+        AppLogger.log('操作题缓存已清理');
       }
       _operationCacheDir = null;
     } catch (e) {
-      print('清理缓存失败: $e');
+      AppLogger.log('清理缓存失败: $e');
     }
   }
 
@@ -282,10 +282,10 @@ class FilePickerService {
       if (await cacheDir.exists()) {
         // 只删除这个特定题目的缓存目录
         await cacheDir.delete(recursive: true);
-        print('缓存目录已删除: ${cacheDir.path}');
+        AppLogger.log('缓存目录已删除: ${cacheDir.path}');
       }
     } catch (e) {
-      print('删除缓存目录失败: $e');
+      AppLogger.log('删除缓存目录失败: $e');
     }
   }
 
@@ -334,7 +334,7 @@ class FilePickerService {
 
       return result;
     } catch (e) {
-      print('读取行上下文失败: $e');
+      AppLogger.log('读取行上下文失败: $e');
       return [];
     }
   }

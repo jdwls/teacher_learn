@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async';import 'utils/app_logger.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -28,37 +28,46 @@ void main() async {
   debugPaintSizeEnabled = false; // 禁用布局边界调试
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 启动 HTTP API 服务器（带超时保护）
-  bool httpServerStarted = false;
-  try {
-    await HttpServerService.instance
-        .startServer(20020)
-        .timeout(const Duration(seconds: 10));
-    httpServerStarted = true;
-  } on TimeoutException {
-    // 超时后服务器可能仍在后台完成绑定，使用实际运行状态确认。
-    httpServerStarted = HttpServerService.instance.isRunning;
-    print('警告: HTTP API 服务器启动超时（10秒）${httpServerStarted ? '，但服务已绑定' : '，跳过'}');
-  } catch (e) {
-    print('HTTP API 服务器启动失败: $e');
+  // 【性能优化】两个服务器并行启动（原来串行各等 10 秒，最坏白屏 20 秒）
+  Future<bool> startHttp() async {
+    try {
+      await HttpServerService.instance
+          .startServer(20020)
+          .timeout(const Duration(seconds: 10));
+      return true;
+    } on TimeoutException {
+      // 超时后服务器可能仍在后台完成绑定，使用实际运行状态确认。
+      final ok = HttpServerService.instance.isRunning;
+      AppLogger.log('警告: HTTP API 服务器启动超时（10秒）${ok ? '，但服务已绑定' : '，跳过'}');
+      return ok;
+    } catch (e) {
+      AppLogger.log('HTTP API 服务器启动失败: $e');
+      return false;
+    }
   }
 
-  // 启动 Socket 服务（带超时保护）
-  bool socketServerStarted = false;
-  try {
-    await ServerService.instance
-        .startServer()
-        .timeout(const Duration(seconds: 10));
-    socketServerStarted = true;
-  } on TimeoutException {
-    print('警告: Socket 服务器启动超时（10秒），跳过');
-  } catch (e) {
-    print('Socket 服务器启动失败: $e');
+  Future<bool> startSocket() async {
+    try {
+      await ServerService.instance
+          .startServer()
+          .timeout(const Duration(seconds: 10));
+      return true;
+    } on TimeoutException {
+      AppLogger.log('警告: Socket 服务器启动超时（10秒），跳过');
+      return false;
+    } catch (e) {
+      AppLogger.log('Socket 服务器启动失败: $e');
+      return false;
+    }
   }
+
+  final started = await Future.wait<bool>([startHttp(), startSocket()]);
+  final httpServerStarted = started[0];
+  final socketServerStarted = started[1];
 
   // 如果服务器启动失败，显示警告（但不阻止应用运行）
   if (!httpServerStarted || !socketServerStarted) {
-    print('警告: 部分服务器启动失败，部分功能可能不可用');
+    AppLogger.log('警告: 部分服务器启动失败，部分功能可能不可用');
   }
 
   // 设置教师端激活标志
@@ -66,7 +75,7 @@ void main() async {
     HttpServerService.instance.setTeacherActive(true);
     ServerService.instance.setTeacherActive();
   } catch (e) {
-    print('设置教师激活状态失败: $e');
+    AppLogger.log('设置教师激活状态失败: $e');
   }
 
   // 初始化窗口管理器
@@ -88,7 +97,7 @@ void main() async {
       await windowManager.focus();
     });
   } catch (e) {
-    print('窗口管理器初始化失败: $e');
+    AppLogger.log('窗口管理器初始化失败: $e');
   }
 
   runApp(const TeacherApp());
@@ -226,7 +235,7 @@ class _MainNavigationPageState extends State<MainNavigationPage>
             currentTime.compareTo(endTime) < 0) {
           final className = todaySchedule[i]?.toString() ?? '';
           if (className.isNotEmpty) {
-            print('课表自动选择班级: $className ($todayLabel $timeStr)');
+            AppLogger.log('课表自动选择班级: $className ($todayLabel $timeStr)');
             await _applyClass(className);
             return;
           }
@@ -236,7 +245,7 @@ class _MainNavigationPageState extends State<MainNavigationPage>
       // 当前时间不在任何节课内，使用默认班级
       _setDefaultClass();
     } catch (e) {
-      print('课表自动选择班级失败: $e');
+      AppLogger.log('课表自动选择班级失败: $e');
       _setDefaultClass();
     }
   }
@@ -254,9 +263,9 @@ class _MainNavigationPageState extends State<MainNavigationPage>
     try {
       // 直接调用 HttpServerService 内部方法，避免 HTTP 回环
       HttpServerService.instance.setActiveClass(classLabel);
-      print('已设置活跃班级: $classLabel');
+      AppLogger.log('已设置活跃班级: $classLabel');
     } catch (e) {
-      print('设置活跃班级失败: $e');
+      AppLogger.log('设置活跃班级失败: $e');
     }
   }
 
@@ -267,9 +276,9 @@ class _MainNavigationPageState extends State<MainNavigationPage>
     // 直接调用 HttpServerService 内部方法，避免 HTTP 回环
     try {
       HttpServerService.instance.setTeacherActive(true);
-      print('已通知后端：教师端已激活');
+      AppLogger.log('已通知后端：教师端已激活');
     } catch (e) {
-      print('通知后端失败: $e');
+      AppLogger.log('通知后端失败: $e');
     }
   }
 
@@ -287,7 +296,7 @@ class _MainNavigationPageState extends State<MainNavigationPage>
         prefs.setBool('teacher_active', false);
       });
     } catch (e) {
-      print('清除教师激活状态失败: $e');
+      AppLogger.log('清除教师激活状态失败: $e');
     }
   }
 

@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:convert';import '../utils/app_logger.dart';
 import 'dart:io';
 import 'package:path/path.dart' as path;
 
@@ -28,7 +28,7 @@ class QuestionBankConfigService {
         return json.decode(content) as Map<String, dynamic>;
       }
     } catch (e) {
-      print('加载题库配置失败: $e');
+      AppLogger.log('加载题库配置失败: $e');
     }
 
     // 返回默认配置
@@ -90,10 +90,10 @@ class QuestionBankConfigService {
         }
         await tempFile.rename(file.path);
 
-        print('题库配置已保存: $configPath');
+        AppLogger.log('题库配置已保存: $configPath');
         return true;
       } catch (e) {
-        print('保存题库配置失败: $e');
+        AppLogger.log('保存题库配置失败: $e');
         // 清理临时文件
         try {
           if (await tempFile.exists()) {
@@ -103,7 +103,7 @@ class QuestionBankConfigService {
         return false;
       }
     } catch (e) {
-      print('保存题库配置失败: $e');
+      AppLogger.log('保存题库配置失败: $e');
       return false;
     }
   }

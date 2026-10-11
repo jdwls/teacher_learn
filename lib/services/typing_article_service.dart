@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:convert';import '../utils/app_logger.dart';
 import 'dart:io';
 import 'dart:math';
 import 'package:path/path.dart' as path;
@@ -21,7 +21,7 @@ class TypingArticleService {
     try {
       final file = File(path.join(_assetsDir, 'chinese_typing_articles.json'));
       if (!file.existsSync()) {
-        print('中文打字文章JSON文件不存在: ${file.path}');
+        AppLogger.log('中文打字文章JSON文件不存在: ${file.path}');
         return [];
       }
       final content = file.readAsStringSync();
@@ -36,7 +36,7 @@ class TypingArticleService {
       }
       return _chineseArticles!;
     } catch (e) {
-      print('加载中文打字文章失败: $e');
+      AppLogger.log('加载中文打字文章失败: $e');
       return [];
     }
   }
@@ -47,7 +47,7 @@ class TypingArticleService {
     try {
       final file = File(path.join(_assetsDir, 'english_typing_articles.json'));
       if (!file.existsSync()) {
-        print('英文打字文章JSON文件不存在: ${file.path}');
+        AppLogger.log('英文打字文章JSON文件不存在: ${file.path}');
         return [];
       }
       final content = file.readAsStringSync();
@@ -62,7 +62,7 @@ class TypingArticleService {
       }
       return _englishArticles!;
     } catch (e) {
-      print('加载英文打字文章失败: $e');
+      AppLogger.log('加载英文打字文章失败: $e');
       return [];
     }
   }
@@ -124,7 +124,7 @@ class TypingArticleService {
       refreshCache();
       return true;
     } catch (e) {
-      print('保存${type == 'chinese' ? '中文' : '英文'}打字文章失败: $e');
+      AppLogger.log('保存${type == 'chinese' ? '中文' : '英文'}打字文章失败: $e');
       return false;
     }
   }

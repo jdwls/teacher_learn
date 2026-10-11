@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:convert';import '../utils/app_logger.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -106,7 +106,7 @@ class _TypingControlPageState extends State<TypingControlPage>
         }
       }
     } catch (e) {
-      print('加载课表失败: $e');
+      AppLogger.log('加载课表失败: $e');
     }
   }
 
@@ -190,7 +190,7 @@ class _TypingControlPageState extends State<TypingControlPage>
         }
       }
     } catch (e) {
-      print('加载打字配置失败: $e');
+      AppLogger.log('加载打字配置失败: $e');
     }
   }
 
@@ -227,9 +227,9 @@ class _TypingControlPageState extends State<TypingControlPage>
       if (response.statusCode == 200) {
         return true;
       }
-      print('同步打字配置失败: HTTP ${response.statusCode}');
+      AppLogger.log('同步打字配置失败: HTTP ${response.statusCode}');
     } catch (e) {
-      print('同步打字配置失败: $e');
+      AppLogger.log('同步打字配置失败: $e');
     }
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

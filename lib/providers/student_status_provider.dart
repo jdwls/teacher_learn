@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async';import '../utils/app_logger.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -113,7 +113,15 @@ class StudentStatusProvider extends ChangeNotifier {
   // 防抖间隔（毫秒）
   static const int _debounceInterval = 3000;
 
-  List<StudentStatusInfo> get students => List.unmodifiable(_students);
+  // 【性能优化】缓存只读视图：getter 被界面代码多次访问时不再每次都拷贝整个列表，
+  // 只在 _students 数据变化时重建一次。
+  List<StudentStatusInfo>? _studentsView;
+
+  /// 【性能优化】unmodifiable 视图的缓存版本
+  List<StudentStatusInfo> get students {
+    _studentsView ??= List.unmodifiable(_students);
+    return _studentsView!;
+  }
   bool get isLoading => _isLoading;
 
   // 获取特定班级的学生
@@ -184,6 +192,7 @@ class StudentStatusProvider extends ChangeNotifier {
 
         _rosterCache = List.of(newStudents);
         _students = newStudents;
+        _studentsView = null; // 数据变化，重建只读视图
         notifyListeners();
       }
     } catch (e) {
@@ -220,7 +229,7 @@ class StudentStatusProvider extends ChangeNotifier {
     try {
       ServerService.instance.forceCheckHeartbeatTimeout();
     } catch (e) {
-      print('检查心跳超时失败: $e');
+      AppLogger.log('检查心跳超时失败: $e');
     }
     _loadStudentsFromServer();
   }
@@ -273,6 +282,7 @@ class StudentStatusProvider extends ChangeNotifier {
       }
 
       _students = roster;
+      _studentsView = null; // 数据变化，重建只读视图
       notifyListeners();
     } catch (e) {
       // 忽略错误
@@ -291,7 +301,7 @@ class StudentStatusProvider extends ChangeNotifier {
         final statusStr = status.name;
         ServerService.instance.updateStudentStatus(studentId, statusStr);
       } catch (e) {
-        print('同步学生状态到ServerService失败: $e');
+        AppLogger.log('同步学生状态到ServerService失败: $e');
       }
 
       notifyListeners();
@@ -314,6 +324,7 @@ class StudentStatusProvider extends ChangeNotifier {
 
     // 清空学生列表
     _students = [];
+    _studentsView = null;
 
     // 【P5修复】必须调用 super.dispose()
     super.dispose();
