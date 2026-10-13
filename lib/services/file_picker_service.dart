@@ -172,9 +172,7 @@ class FilePickerService {
 
   /// 获取操作题缓存目录
   static String getOperationCacheDir() {
-    if (_operationCacheDir == null) {
-      _operationCacheDir = '${Directory.systemTemp.path}/operation_file_cache';
-    }
+    _operationCacheDir ??= '${Directory.systemTemp.path}/operation_file_cache';
     return _operationCacheDir!;
   }
 

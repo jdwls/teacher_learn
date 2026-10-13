@@ -112,7 +112,7 @@ mixin ChoiceQuestionMixin on State {
   }
 
   Future<void> deleteImage(String imageType) async {
-    final label = imageType == 'question' ? '题干图片' : '选项${imageType}图片';
+    final label = imageType == 'question' ? '题干图片' : '选项$imageType图片';
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -437,7 +437,7 @@ mixin ChoiceQuestionMixin on State {
       enabled: enabled,
       decoration: InputDecoration(
         labelText: '$label 选项',
-        hintText: enabled ? '请输入${label}选项内容...' : '请先选择题库',
+        hintText: enabled ? '请输入$label选项内容...' : '请先选择题库',
         filled: true,
         fillColor: enabled ? const Color(0xFFF8FAFC) : Colors.grey[200],
         border: OutlineInputBorder(

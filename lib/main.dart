@@ -88,7 +88,7 @@ void main() async {
       backgroundColor: Colors.transparent,
       skipTaskbar: false,
       titleBarStyle: TitleBarStyle.normal,
-      minimumSize: const Size(1024, 600),
+      minimumSize: Size(1024, 600),
       title: '教师端',
     );
 
@@ -111,8 +111,8 @@ class TeacherApp extends StatelessWidget {
     // 基于窗口尺寸计算字体缩放比例
     // 基准尺寸: 1280x7 20，缩放基准: 1.0
     final screenSize = MediaQuery.of(context).size;
-    final baseWidth = 1280.0;
-    final baseHeight = 720.0;
+    const baseWidth = 1280.0;
+    const baseHeight = 720.0;
 
     // 取宽高缩放比例的平均值，确保字体缩放与窗口变化一致
     final scaleX = screenSize.width / baseWidth;

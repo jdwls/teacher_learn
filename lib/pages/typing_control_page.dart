@@ -42,7 +42,7 @@ class _TypingControlPageState extends State<TypingControlPage>
     {'time': '16:00-16:45'},
     {'time': '16:55-17:40'},
   ];
-  List<List<String>> _schedule = List.generate(8, (_) => List.filled(5, ''));
+  final List<List<String>> _schedule = List.generate(8, (_) => List.filled(5, ''));
 
   // 在线升级
   bool _onlineUpdateEnabled = false;

@@ -582,7 +582,6 @@ class _QuestionsPageState extends State
           ),
         );
       },
-      child: Text(label),
       style: ElevatedButton.styleFrom(
         backgroundColor:
             isSelected ? AppTheme.primaryBlue : const Color(0xFFE5E7EB),
@@ -592,6 +591,7 @@ class _QuestionsPageState extends State
           borderRadius: BorderRadius.circular(12),
         ),
       ),
+      child: Text(label),
     );
   }
 
@@ -772,6 +772,7 @@ class _QuestionsPageState extends State
                               }
                             });
 
+                            if (!mounted) return;
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
@@ -788,7 +789,6 @@ class _QuestionsPageState extends State
           ),
         );
       },
-      child: const Text('选择题库'),
       style: ElevatedButton.styleFrom(
         backgroundColor: AppTheme.successGreen,
         foregroundColor: Colors.white,
@@ -797,6 +797,7 @@ class _QuestionsPageState extends State
           borderRadius: BorderRadius.circular(12),
         ),
       ),
+      child: const Text('选择题库'),
     );
   }
 

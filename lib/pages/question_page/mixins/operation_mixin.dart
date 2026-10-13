@@ -134,7 +134,7 @@ mixin OperationQuestionMixin on State {
       final self = this as dynamic;
       final controllers = self.operationFileControllers as List<OperationFileController>;
 
-      while (controllers.length < 1) {
+      while (controllers.isEmpty) {
         controllers.add(OperationFileController());
       }
 

@@ -1404,9 +1404,7 @@ class _StatisticsPageState extends State<StatisticsPage>
           (record['wrong_questions'] as List?)?.cast<Map<String, dynamic>>() ??
               [];
       // 获取题库名称
-      if (examName == null) {
-        examName = record['exam_name']?.toString();
-      }
+      examName ??= record['exam_name']?.toString();
       for (final w in wrongs) {
         final qNum = w['question_number']?.toString() ?? '';
         final qType = w['question_type']?.toString() ?? '';
