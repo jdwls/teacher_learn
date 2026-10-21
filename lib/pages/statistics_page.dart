@@ -6,6 +6,22 @@ import '../services/question_bank_config_service.dart';
 import '../services/question_bank_service.dart';
 import '../theme/app_theme.dart';
 
+/// 排名表格中的一行数据
+/// 有成绩记录的学生 [summary] 非空；名单中未参加的学生 [summary] 为空
+class _RankingRowData {
+  final String studentId;
+  final String studentName;
+  final StudentSummary? summary;
+
+  const _RankingRowData({
+    required this.studentId,
+    required this.studentName,
+    this.summary,
+  });
+
+  bool get hasRecord => summary != null;
+}
+
 class StatisticsPage extends StatefulWidget {
   const StatisticsPage({super.key});
 
@@ -555,7 +571,9 @@ class _StatisticsPageState extends State<StatisticsPage>
                 ? provider.chineseTypingRankings
                 : provider.englishTypingRankings;
 
-        if (overview.participantCount == 0 && rankings.isEmpty) {
+        if (overview.participantCount == 0 &&
+            rankings.isEmpty &&
+            provider.classStudents.isEmpty) {
           return _buildEmptyWidget(
               '暂无${type == 'exam' ? '课堂小测' : type == 'chinese' ? '中文打字' : '英文打字'}数据');
         }
@@ -783,24 +801,46 @@ class _StatisticsPageState extends State<StatisticsPage>
 
   Widget _buildRankingTable(
       List<StudentSummary> rankings, String type, StatisticsProvider provider) {
-    if (rankings.isEmpty) return const SizedBox.shrink();
+    // 合并班级名单：把没有成绩记录的学生也加入表格
+    final rows = <_RankingRowData>[
+      for (final student in rankings)
+        _RankingRowData(
+          studentId: student.studentId,
+          studentName: student.studentName,
+          summary: student,
+        ),
+    ];
+    final scoredIds = rankings.map((r) => r.studentId).toSet();
+    for (final student in provider.classStudents) {
+      final studentId = student['id']?.toString() ?? '';
+      if (studentId.isEmpty || scoredIds.contains(studentId)) continue;
+      rows.add(_RankingRowData(
+        studentId: studentId,
+        studentName: student['name']?.toString() ?? '',
+      ));
+    }
+    if (rows.isEmpty) return const SizedBox.shrink();
 
-    // 排序
-    final sorted = List<StudentSummary>.from(rankings);
+    // 排序：按姓名排序时未参加学生与已参加学生混排，其余列未参加学生排在最后
+    final sorted = List<_RankingRowData>.from(rows);
+    final sortByName = _sortColumnIndex == 1;
     sorted.sort((a, b) {
+      if (!sortByName && a.hasRecord != b.hasRecord) {
+        return a.hasRecord ? -1 : 1;
+      }
       int cmp;
       switch (_sortColumnIndex) {
         case 0: // 序号（按原始顺序即得分排名）
-          cmp = a.avgScore.compareTo(b.avgScore);
+          cmp = (a.summary?.avgScore ?? 0).compareTo(b.summary?.avgScore ?? 0);
           break;
         case 1: // 姓名
           cmp = a.studentName.compareTo(b.studentName);
           break;
         case 2: // 得分
-          cmp = a.avgScore.compareTo(b.avgScore);
+          cmp = (a.summary?.avgScore ?? 0).compareTo(b.summary?.avgScore ?? 0);
           break;
         default:
-          cmp = a.avgScore.compareTo(b.avgScore);
+          cmp = (a.summary?.avgScore ?? 0).compareTo(b.summary?.avgScore ?? 0);
       }
       return _sortAscending ? cmp : -cmp;
     });
@@ -902,16 +942,17 @@ class _StatisticsPageState extends State<StatisticsPage>
     return Expanded(child: widget);
   }
 
-  Widget _buildTableRow(StudentSummary student, int rank, String type,
+  Widget _buildTableRow(_RankingRowData row, int rank, String type,
       StatisticsProvider provider) {
+    final student = row.summary;
     return GestureDetector(
       onTap: () {
         if (type == 'exam') {
           _showStudentWrongQuestionsDialog(
-              student.studentId, student.studentName, provider);
+              row.studentId, row.studentName, provider);
         } else {
           _showTypingDetailDialog(
-              student.studentId, student.studentName, type, provider);
+              row.studentId, row.studentName, type, provider);
         }
       },
       child: Container(
@@ -922,7 +963,7 @@ class _StatisticsPageState extends State<StatisticsPage>
         child: Row(children: [
           SizedBox(
             width: 50,
-            child: Text('$rank',
+            child: Text(student == null ? '-' : '$rank',
                 style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
@@ -930,7 +971,7 @@ class _StatisticsPageState extends State<StatisticsPage>
           ),
           SizedBox(
             width: 100,
-            child: Text(student.studentName,
+            child: Text(row.studentName,
                 style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
@@ -938,24 +979,33 @@ class _StatisticsPageState extends State<StatisticsPage>
           ),
           SizedBox(
             width: 80,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: _getScoreColor(student.avgScore).withAlpha(20),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(student.avgScore.toStringAsFixed(1),
-                  style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: _getScoreColor(student.avgScore))),
-            ),
+            child: student == null
+                ? const Text('未参与',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textSecondary))
+                : Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: _getScoreColor(student.avgScore).withAlpha(20),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(student.avgScore.toStringAsFixed(1),
+                        style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: _getScoreColor(student.avgScore))),
+                  ),
           ),
           if (type != 'exam') ...[
             SizedBox(
               width: 80,
               child: Text(
-                  '${provider.getStudentTypingAvgSpeed(student.studentId, type)}字/分',
+                  student == null
+                      ? '—'
+                      : '${provider.getStudentTypingAvgSpeed(row.studentId, type)}字/分',
                   style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
@@ -964,7 +1014,9 @@ class _StatisticsPageState extends State<StatisticsPage>
             SizedBox(
               width: 60,
               child: Text(
-                  '${provider.getStudentTypingAvgAccuracy(student.studentId, type)}%',
+                  student == null
+                      ? '—'
+                      : '${provider.getStudentTypingAvgAccuracy(row.studentId, type)}%',
                   style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
@@ -973,7 +1025,13 @@ class _StatisticsPageState extends State<StatisticsPage>
           ],
           if (type == 'exam')
             Expanded(
-              child: _buildQuestionDetailRow(student.studentId, provider),
+              child: student == null
+                  ? const Text('未参与',
+                      style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textSecondary))
+                  : _buildQuestionDetailRow(row.studentId, provider),
             ),
         ]),
       ),

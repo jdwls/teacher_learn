@@ -1,4 +1,5 @@
-import 'dart:convert';import '../utils/app_logger.dart';
+import 'dart:convert';
+import '../utils/app_logger.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -839,8 +840,9 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     );
   }
 
-  // 按钮行（响应式）
+  // 按钮行（仅编辑模式：保存修改 / 删除学生 / 取消编辑）
   Widget _buildButtonRow() {
+    if (_editingStudent == null) return const SizedBox.shrink();
     return LayoutBuilder(
       builder: (context, constraints) {
         final isNarrow = constraints.maxWidth < 500;
@@ -854,62 +856,21 @@ class _StudentManagementPageState extends State<StudentManagementPage>
                 child: ElevatedButton.icon(
                   onPressed: _saveEditStudent,
                   icon: const Icon(Icons.save),
-                  label: Text(_editingStudent != null ? '保存修改' : '保存'),
+                  label: const Text('保存修改'),
                   style: AppTheme.primaryButtonStyle,
                 ),
               ),
               SizedBox(
                 width: constraints.maxWidth,
-                child: OutlinedButton.icon(
-                  onPressed: _addStudent,
-                  icon: const Icon(Icons.person_add),
-                  label: const Text('添加学生'),
-                  style: AppTheme.secondaryButtonStyle,
+                child: ElevatedButton.icon(
+                  onPressed: _confirmDeleteEditingStudent,
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('删除学生'),
+                  style: AppTheme.dangerButtonStyle,
                 ),
               ),
-              if (_editingStudent != null)
-                SizedBox(
-                  width: constraints.maxWidth,
-                  child: OutlinedButton.icon(
-                    onPressed: _clearEditPanel,
-                    icon: const Icon(Icons.clear),
-                    label: const Text('取消编辑'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppTheme.textSecondary,
-                      side: const BorderSide(color: AppTheme.borderMain),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          );
-        }
-        return Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: _saveEditStudent,
-                icon: const Icon(Icons.save),
-                label: Text(_editingStudent != null ? '保存修改' : '保存'),
-                style: AppTheme.primaryButtonStyle,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _addStudent,
-                icon: const Icon(Icons.person_add),
-                label: const Text('添加学生'),
-                style: AppTheme.secondaryButtonStyle,
-              ),
-            ),
-            if (_editingStudent != null) ...[
-              const SizedBox(width: 12),
-              Expanded(
+              SizedBox(
+                width: constraints.maxWidth,
                 child: OutlinedButton.icon(
                   onPressed: _clearEditPanel,
                   icon: const Icon(Icons.clear),
@@ -926,6 +887,44 @@ class _StudentManagementPageState extends State<StudentManagementPage>
                 ),
               ),
             ],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: _saveEditStudent,
+                icon: const Icon(Icons.save),
+                label: const Text('保存修改'),
+                style: AppTheme.primaryButtonStyle,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: _confirmDeleteEditingStudent,
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('删除学生'),
+                style: AppTheme.dangerButtonStyle,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _clearEditPanel,
+                icon: const Icon(Icons.clear),
+                label: const Text('取消编辑'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.textSecondary,
+                  side: const BorderSide(color: AppTheme.borderMain),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
           ],
         );
       },
@@ -1101,6 +1100,15 @@ class _StudentManagementPageState extends State<StudentManagementPage>
       _editPointsController.text = '${student['points'] ?? 0}';
       _editSelectedClassId = student['class_id'] ?? _selectedClassId;
     });
+
+    // 异步用账本权威积分刷新输入框，避免把过期的显示值误当成目标值保存
+    final studentId = student['id']?.toString() ?? '';
+    if (studentId.isEmpty) return;
+    _httpService.getStudentAuthoritativePoints(studentId).then((points) {
+      if (!mounted || points == null) return;
+      if (_editingStudent?['id']?.toString() != studentId) return;
+      setState(() => _editPointsController.text = '$points');
+    });
   }
 
   void _clearEditPanel() {
@@ -1122,7 +1130,8 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     final password = _editPasswordController.text.trim();
     final computerName = _editComputerController.text.trim();
     final ip = _editIpController.text.trim();
-    final points = int.tryParse(_editPointsController.text.trim()) ?? 0;
+    final parsedPoints = int.tryParse(_editPointsController.text.trim()) ?? 0;
+    final points = parsedPoints < 0 ? 0 : parsedPoints;
     final newClassId = _editSelectedClassId ?? _selectedClassId;
 
     if (name.isEmpty) {
@@ -1140,13 +1149,20 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     }
 
     final oldClassId = _editingStudent!['class_id'] as String?;
+    final studentId = _editingStudent!['id']?.toString() ?? '';
+
+    // 以账本重算后的积分为基准，避免直接改 points 被后续成绩同步覆盖
+    final oldAuthoritativePoints =
+        await _httpService.getStudentAuthoritativePoints(studentId) ??
+            _studentPoints(_editingStudent!);
 
     final updatedStudent = Map<String, dynamic>.from(_editingStudent!);
     updatedStudent['name'] = name;
     updatedStudent['password'] = password;
     updatedStudent['computer_name'] = computerName;
     updatedStudent['ip'] = ip;
-    updatedStudent['points'] = points;
+    // 先保留账本当前值，积分变化在保存/跨班移动完成后通过「积分调整表」生效
+    updatedStudent['points'] = oldAuthoritativePoints;
     updatedStudent['class_id'] = newClassId;
 
     if (oldClassId != null && oldClassId != newClassId) {
@@ -1177,6 +1193,34 @@ class _StudentManagementPageState extends State<StudentManagementPage>
       await _httpService.flushClassStudentsNow(oldClassId);
     }
 
+    // 积分变化统一写入「积分调整表」并重算总积分。
+    // 跨班移动时账本记录在新班级，必须在移动落盘后再计算调整量。
+    final isMovingClass = oldClassId != null && oldClassId != newClassId;
+    if (isMovingClass || points != oldAuthoritativePoints) {
+      final newAuthoritativePoints =
+          await _httpService.getStudentAuthoritativePoints(studentId) ??
+              oldAuthoritativePoints;
+      final pointsDelta = points - newAuthoritativePoints;
+      if (pointsDelta != 0) {
+        final result =
+            await _httpService.updateStudentPoints(studentId, pointsDelta);
+        if (result == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('学生信息已保存，但积分调整失败，请重试'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        } else {
+          await _httpService.flushClassStudentsNow(newClassId);
+          AppLogger.log(
+              '学生 $studentId 积分设置为 $points（调整量 $pointsDelta，结果 ${result['points']}）');
+        }
+      }
+    }
+
     setState(() {
       _clearEditPanel();
       _loadStudents();
@@ -1185,55 +1229,6 @@ class _StudentManagementPageState extends State<StudentManagementPage>
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('学生信息已更新'), backgroundColor: Colors.green),
-      );
-    }
-  }
-
-  Future<void> _addStudent() async {
-    final name = _editNameController.text.trim();
-    final password = _editPasswordController.text.trim();
-    final computerName = _editComputerController.text.trim();
-    final ip = _editIpController.text.trim();
-    final points = int.tryParse(_editPointsController.text.trim()) ?? 0;
-    final classId = _editSelectedClassId ?? _selectedClassId;
-
-    if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('姓名不能为空'), backgroundColor: Colors.red),
-      );
-      return;
-    }
-
-    if (classId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请选择班级'), backgroundColor: Colors.red),
-      );
-      return;
-    }
-
-    final student = {
-      'id': DateTime.now().millisecondsSinceEpoch.toString(),
-      'name': name,
-      'password': password,
-      'class_id': classId,
-      'computer_name': computerName,
-      'ip': ip,
-      'points': points,
-      'register_time': DateTime.now().toIso8601String(),
-    };
-
-    await _httpService.saveStudentToClass(classId, student);
-    // 【热更新】添加学生后立即落盘并同步缓存，无需重启教师端即可登录使用
-    await _httpService.flushClassStudentsNow(classId);
-
-    setState(() {
-      _clearEditPanel();
-      _loadStudents();
-    });
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('学生 $name 已添加'), backgroundColor: Colors.green),
       );
     }
   }
@@ -1261,6 +1256,13 @@ class _StudentManagementPageState extends State<StudentManagementPage>
       ),
     );
   }
+
+  void _confirmDeleteEditingStudent() {
+    final student = _editingStudent;
+    if (student == null) return;
+    _showDeleteConfirm(student);
+  }
+
 
   Future<void> _deleteStudent(Map<String, dynamic> student) async {
     final classId = student['class_id'] as String? ?? _selectedClassId;

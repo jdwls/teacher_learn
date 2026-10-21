@@ -698,7 +698,7 @@ class HttpServerService {
         final record = r as Map<String, dynamic>;
         if (record['student_id'] == studentId) {
           final examName = record['exam_name'] as String? ?? '';
-          final points = (record['points'] as int?) ?? 0;
+          final points = (record['points'] as num?)?.toInt() ?? 0;
           final score = (record['score'] as num?)?.toDouble() ?? 0;
           final existing = bestExamPoints[examName];
           if (existing == null || score > existing.score) {
@@ -715,7 +715,7 @@ class HttpServerService {
       for (final r in (typingData['records'] as List<dynamic>? ?? [])) {
         final record = r as Map<String, dynamic>;
         if (record['student_id'] == studentId) {
-          totalPoints += (record['points'] as int?) ?? 0;
+          totalPoints += (record['points'] as num?)?.toInt() ?? 0;
         }
       }
 
@@ -755,6 +755,35 @@ class HttpServerService {
     } catch (e) {
       AppLogger.log('同步积分失败: $e');
     }
+  }
+
+  /// 安全解析积分数值（兼容 int / double / 字符串）
+  static int _parsePointsValue(dynamic value) {
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  /// 读取学生当前存储的积分（不做重算）
+  int _storedStudentPoints(String classId, String studentId) {
+    final students = loadClassStudents(classId);
+    final index = students.indexWhere((s) => s['id'] == studentId);
+    if (index == -1) return 0;
+    return _parsePointsValue(students[index]['points']);
+  }
+
+  /// 获取学生当前权威积分（小测 + 打字 + 手动调整 − 兑换消耗）
+  /// 会先按账本重算一次；找不到学生返回 null
+  Future<int?> getStudentAuthoritativePoints(String studentId) async {
+    for (final classId in getAllClassIds()) {
+      final students = loadClassStudents(classId);
+      final index = students.indexWhere((s) => s['id'] == studentId);
+      if (index == -1) continue;
+
+      await _syncStudentTotalPoints(classId, studentId);
+      return _studentPointsCache[studentId] ??
+          _storedStudentPoints(classId, studentId);
+    }
+    return null;
   }
 
   String? _findClassByStudentId(String studentId) {
@@ -1291,7 +1320,7 @@ class HttpServerService {
       await _syncStudentTotalPoints(classId, studentId);
 
       final updatedPoints =
-          _studentPointsCache[studentId] ?? student['points'] as int? ?? 0;
+          _studentPointsCache[studentId] ?? _parsePointsValue(student['points']);
       AppLogger.log(
           '学生 $studentId 积分调整 $delta，重算后总积分=$updatedPoints');
       return {'points': updatedPoints};
@@ -2078,9 +2107,8 @@ class HttpServerService {
               status: 503);
         }
 
-        // 同步积分
+        // 记录积分变动明细（积分增加详细表），供学生端积分变化图表使用
         if (points > 0) {
-          // 记录积分变动明细（积分增加详细表），供学生端积分变化图表使用
           await _withScoreFileLock(resolvedClassId, '积分增加详细表.json',
               (pointsData) {
             final records = (pointsData['records'] as List<dynamic>?) ?? [];
@@ -2093,11 +2121,16 @@ class HttpServerService {
               'exam_name': bankName,
             });
           });
+        }
+
+        // 即使本次 0 分，也要保证总积分缓存已初始化，避免返回 0 覆盖学生端积分
+        if (points > 0 || !_studentPointsCache.containsKey(studentId)) {
           await _syncStudentTotalPoints(resolvedClassId, studentId);
         }
 
         // 返回教师端权威积分值，供学生端同步
-        final totalPoints = _studentPointsCache[studentId] ?? 0;
+        final totalPoints = _studentPointsCache[studentId] ??
+            _storedStudentPoints(resolvedClassId, studentId);
 
         AppLogger.log('答卷已保存: $studentName - $bankName - 得分$score');
         return jsonResponse({
@@ -2261,11 +2294,17 @@ class HttpServerService {
               'type': type,
             });
           });
+        }
+
+        // 0 分或重复提交时同样要保证缓存已初始化，否则会返回 0 把学生端积分清空
+        if ((points > 0 && !isDuplicate) ||
+            !_studentPointsCache.containsKey(studentId)) {
           await _syncStudentTotalPoints(resolvedClassId, studentId);
         }
 
         // 返回教师端权威积分值，供学生端同步
-        final totalPoints = _studentPointsCache[studentId] ?? 0;
+        final totalPoints = _studentPointsCache[studentId] ??
+            _storedStudentPoints(resolvedClassId, studentId);
 
         final typeName = type == 'chinese' ? '中文打字' : '英文打字';
         AppLogger.log('打字成绩已保存: $studentName - $typeName - 得分$score');
@@ -2348,17 +2387,58 @@ class HttpServerService {
             await _readScoreFileAsync(decodedClassId, '学生成绩详细情况表.json');
         final wrongData =
             await _readScoreFileAsync(decodedClassId, '错题记录.json');
+        final adjustData =
+            await _readScoreFileAsync(decodedClassId, '积分调整表.json');
+
+        // 仅返回本班学生的兑换记录，供学生端积分图表扣除消耗
+        final classStudentIds = loadClassStudents(decodedClassId)
+            .map((s) => s['id']?.toString() ?? '')
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        final exchangeRecords =
+            (pointsExchangeConfig['exchange_records'] as List<dynamic>? ?? [])
+                .whereType<Map>()
+                .where((r) =>
+                    classStudentIds.contains(r['student_id']?.toString() ?? ''))
+                .map((r) => Map<String, dynamic>.from(r))
+                .toList();
 
         return jsonResponse({
           'success': true,
           'exam_records': examData['records'] ?? [],
           'typing_records': typingData['records'] ?? [],
           'points_records': pointsData['records'] ?? [],
+          'points_adjust_records': adjustData['records'] ?? [],
+          'exchange_records': exchangeRecords,
           'detail_records': detailData['records'] ?? [],
           'wrong_questions': wrongData['records'] ?? [],
         });
       } catch (e) {
         return jsonResponse({'success': false, 'error': '获取成绩汇总失败: $e'},
+            status: 500);
+      }
+    });
+
+    // 获取班级学生名单（仅返回 id 和姓名，供统计页在成绩表格中补全未参加的学生）
+    router.get('/api/class-students/<class_id>',
+        (Request request, String classId) async {
+      try {
+        final decodedClassId = Uri.decodeComponent(classId);
+        // 先尝试从磁盘刷新名单；存在待落盘的脏数据时会自动跳过，不会丢新学生
+        await refreshClassFromDisk(decodedClassId);
+        final students = loadClassStudents(decodedClassId);
+        return jsonResponse({
+          'success': true,
+          'students': students
+              .map((s) => {
+                    'id': s['id']?.toString() ?? '',
+                    'name': s['name']?.toString() ?? '',
+                  })
+              .where((s) => s['id']!.isNotEmpty)
+              .toList(),
+        });
+      } catch (e) {
+        return jsonResponse({'success': false, 'error': '获取学生名单失败: $e'},
             status: 500);
       }
     });

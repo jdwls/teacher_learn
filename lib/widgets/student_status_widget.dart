@@ -33,6 +33,7 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
     ('classId', '班级', 1.0),
     ('computerName', '电脑名称', 1.6),
     ('ip', 'IP地址', 1.4),
+    ('points', '积分', 0.9),
     ('status', '在线状态', 1.0),
   ];
 
@@ -60,6 +61,9 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
               break;
             case 'ip':
               cmp = a.ip.compareTo(b.ip);
+              break;
+            case 'points':
+              cmp = a.points.compareTo(b.points);
               break;
             case 'status':
               cmp = a.statusText.compareTo(b.statusText);
@@ -132,6 +136,7 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
                                 _buildCell(sorted[i].classId),
                                 _buildCell(sorted[i].computerName),
                                 _buildCell(sorted[i].ip),
+                                _buildCell('${sorted[i].points}', bold: true),
                                 _buildStatusCell(sorted[i]),
                               ],
                             ),
@@ -151,24 +156,27 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 12,
-                color: isSorted ? const Color(0xFF2563EB) : const Color(0xFF334155),
+        child: Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                  color:
+                      isSorted ? const Color(0xFF2563EB) : const Color(0xFF334155),
+                ),
               ),
-            ),
-            if (isSorted)
-              Icon(
-                ascending ? Icons.arrow_upward : Icons.arrow_downward,
-                size: 12,
-                color: const Color(0xFF2563EB),
-              ),
-          ],
+              if (isSorted)
+                Icon(
+                  ascending ? Icons.arrow_upward : Icons.arrow_downward,
+                  size: 12,
+                  color: const Color(0xFF2563EB),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -177,14 +185,18 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
   Widget _buildCell(String text, {bool bold = false}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 12,
-          color: const Color(0xFF334155),
-          fontWeight: bold ? FontWeight.w600 : FontWeight.w400,
+      child: SizedBox(
+        width: double.infinity,
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 12,
+            color: const Color(0xFF334155),
+            fontWeight: bold ? FontWeight.w600 : FontWeight.w400,
+          ),
+          overflow: TextOverflow.ellipsis,
         ),
-        overflow: TextOverflow.ellipsis,
       ),
     );
   }
@@ -194,7 +206,7 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
       child: Align(
-        alignment: Alignment.centerLeft,
+        alignment: Alignment.center,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(

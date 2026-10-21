@@ -1,9 +1,29 @@
 import 'package:flutter/material.dart';
+import '../services/version_service.dart';
 import '../theme/app_theme.dart';
 
 /// 关于页面 - 版权信息
-class ToolsPage extends StatelessWidget {
+class ToolsPage extends StatefulWidget {
   const ToolsPage({super.key});
+
+  @override
+  State<ToolsPage> createState() => _ToolsPageState();
+}
+
+class _ToolsPageState extends State<ToolsPage> {
+  String? _version;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    final version = await VersionService.loadVersion();
+    if (!mounted) return;
+    setState(() => _version = version);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -80,7 +100,8 @@ class ToolsPage extends StatelessWidget {
                   const Divider(height: 24),
                   _buildInfoRow(Icons.chat_bubble_outline, 'QQ', '1761642850'),
                   const Divider(height: 24),
-                  _buildInfoRow(Icons.code_outlined, '版本', 'v1.0.0'),
+                  _buildInfoRow(Icons.code_outlined, '版本',
+                      _version == null ? '-' : 'v$_version'),
                 ],
               ),
             ),

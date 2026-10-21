@@ -72,6 +72,9 @@ class StatisticsProvider extends ChangeNotifier {
   List<Map<String, dynamic>> _typingRecords = [];
   List<Map<String, dynamic>> _wrongQuestions = [];
 
+  /// 当前班级学生名单（仅 id/name），用于在成绩表格中补全未参加的学生
+  List<Map<String, dynamic>> _classStudents = [];
+
   // 班级列表
   List<String> _classList = [];
   String? _selectedClass;
@@ -83,6 +86,7 @@ class StatisticsProvider extends ChangeNotifier {
 
   // Getters
   List<String> get classList => _classList;
+  List<Map<String, dynamic>> get classStudents => _classStudents;
   String? get selectedClass => _selectedClass;
   String? get selectedExamName => _selectedExamName;
   DateTimeRange? get selectedDateRange => _selectedDateRange;
@@ -121,16 +125,24 @@ class StatisticsProvider extends ChangeNotifier {
   Future<void> loadStatistics(String classId) async {
     _isLoading = true;
     _error = null;
+    _classStudents = [];
     notifyListeners();
 
     try {
       final encodedClassId = Uri.encodeComponent(classId);
-      final response = await http
-          .get(
-            Uri.parse(
-                'http://localhost:20020/api/score/summary/$encodedClassId'),
-          )
-          .timeout(const Duration(seconds: 10));
+      // 成绩汇总与班级名单并行请求，名单加载失败不影响成绩统计
+      final results = await Future.wait<dynamic>([
+        http
+            .get(
+              Uri.parse(
+                  'http://localhost:20020/api/score/summary/$encodedClassId'),
+            )
+            .timeout(const Duration(seconds: 10)),
+        _fetchClassStudents(encodedClassId),
+      ]);
+
+      final response = results[0] as http.Response;
+      _classStudents = results[1] as List<Map<String, dynamic>>;
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -154,6 +166,29 @@ class StatisticsProvider extends ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+  }
+
+  /// 获取班级学生名单（接口只返回 id/name），失败时返回空列表
+  Future<List<Map<String, dynamic>>> _fetchClassStudents(
+      String encodedClassId) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse(
+                'http://localhost:20020/api/class-students/$encodedClassId'),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          return (data['students'] as List<dynamic>? ?? [])
+              .cast<Map<String, dynamic>>();
+        }
+      }
+    } catch (e) {
+      AppLogger.log('加载班级学生名单失败: $e');
+    }
+    return [];
   }
 
   // ============ 日期筛选辅助方法 ============

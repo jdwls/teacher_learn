@@ -21,6 +21,7 @@ class StudentStatusInfo {
   final DateTime registerTime;
   StudentStatus status;
   DateTime lastHeartbeat;
+  int points;
 
   StudentStatusInfo({
     required this.id,
@@ -31,6 +32,7 @@ class StudentStatusInfo {
     required this.registerTime,
     this.status = StudentStatus.offline,
     required this.lastHeartbeat,
+    this.points = 0,
   });
 
   Map<String, dynamic> toJson() => {
@@ -42,6 +44,7 @@ class StudentStatusInfo {
         'register_time': registerTime.toIso8601String(),
         'status': status.name,
         'last_heartbeat': lastHeartbeat.toIso8601String(),
+        'points': points,
       };
 
   factory StudentStatusInfo.fromJson(Map<String, dynamic> json) {
@@ -58,7 +61,14 @@ class StudentStatusInfo {
       lastHeartbeat: json['last_heartbeat'] != null
           ? (DateTime.tryParse(json['last_heartbeat'].toString()) ?? DateTime.now())
           : DateTime.now(),
+      points: parsePoints(json['points']),
     );
+  }
+
+  /// 安全解析积分（兼容 int / double / 字符串）
+  static int parsePoints(dynamic value) {
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
   static StudentStatus parseStatus(String? status) {
@@ -277,6 +287,7 @@ class StudentStatusProvider extends ChangeNotifier {
             registerTime: student.registerTime,
             status: status,
             lastHeartbeat: conn.lastHeartbeat,
+            points: conn.points,
           ));
         }
       }
