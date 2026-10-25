@@ -23,6 +23,19 @@ class HttpServerService {
   int _examTimeLimit = 30; // 考试时间限制（分钟）
   int _earlySubmitMinutes = 25; // 提前交卷时间（考试开始多少分钟后可交卷）
 
+  // ============ 课堂小测全局锁与收卷 ============
+  /// 是否禁止进入课堂小测（全局锁）
+  bool _examEntryDisabled = false;
+
+  /// 收卷请求：studentId -> 下发时间（仅小测页学生处理，60 秒过期）
+  final Map<String, DateTime> _collectRequests = {};
+  static const Duration _collectRequestTtl = Duration(seconds: 60);
+
+  String get examControlPath =>
+      path.join(_informationRoot, 'manage', 'exam_control.json');
+  String get examCollectPath =>
+      path.join(_informationRoot, 'manage', 'exam_collect.json');
+
   // ============ 性能优化：内存缓存与并发控制 ============
   /// 【P6修复】题库缓存（bankName -> data），避免重复读取磁盘，带 LRU 限制
   final Map<String, Map<String, dynamic>> _questionBankCache = {};
@@ -471,6 +484,91 @@ class HttpServerService {
       AppLogger.log('保存积分兑换配置失败: $e');
       return false;
     }
+  }
+
+  /// 加载课堂小测全局锁与未过期的收卷请求
+  Future<void> _loadExamControlState() async {
+    try {
+      final controlFile = File(examControlPath);
+      if (await controlFile.exists()) {
+        final data = json.decode(await controlFile.readAsString());
+        if (data is Map) {
+          _examEntryDisabled = data['exam_entry_disabled'] == true;
+        }
+      }
+    } catch (e) {
+      AppLogger.log('加载课堂小测全局锁失败: $e');
+    }
+
+    try {
+      final collectFile = File(examCollectPath);
+      if (await collectFile.exists()) {
+        final data = json.decode(await collectFile.readAsString());
+        final now = DateTime.now();
+        for (final r in (data['requests'] as List<dynamic>? ?? [])) {
+          if (r is! Map) continue;
+          final studentId = r['student_id']?.toString() ?? '';
+          final issuedAt =
+              DateTime.tryParse(r['issued_at']?.toString() ?? '');
+          if (studentId.isEmpty || issuedAt == null) continue;
+          if (now.difference(issuedAt) <= _collectRequestTtl) {
+            _collectRequests[studentId] = issuedAt;
+          }
+        }
+      }
+    } catch (e) {
+      AppLogger.log('加载收卷请求失败: $e');
+    }
+
+    AppLogger.log(
+        '课堂小测控制状态: 全局锁=$_examEntryDisabled, 待收卷=${_collectRequests.length}');
+  }
+
+  Future<void> _saveExamControlState() async {
+    try {
+      final file = File(examControlPath);
+      await file.parent.create(recursive: true);
+      final data = {
+        'exam_entry_disabled': _examEntryDisabled,
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      final temp = File('${file.path}.tmp');
+      await temp.writeAsString(
+          const JsonEncoder.withIndent('  ').convert(data),
+          flush: true);
+      await temp.rename(file.path);
+    } catch (e) {
+      AppLogger.log('保存课堂小测全局锁失败: $e');
+    }
+  }
+
+  Future<void> _saveCollectRequests() async {
+    try {
+      final file = File(examCollectPath);
+      await file.parent.create(recursive: true);
+      final data = {
+        'requests': _collectRequests.entries
+            .map((e) => {
+                  'student_id': e.key,
+                  'issued_at': e.value.toIso8601String(),
+                })
+            .toList(),
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      final temp = File('${file.path}.tmp');
+      await temp.writeAsString(
+          const JsonEncoder.withIndent('  ').convert(data),
+          flush: true);
+      await temp.rename(file.path);
+    } catch (e) {
+      AppLogger.log('保存收卷请求失败: $e');
+    }
+  }
+
+  void _pruneCollectRequests() {
+    final now = DateTime.now();
+    _collectRequests.removeWhere(
+        (_, issuedAt) => now.difference(issuedAt) > _collectRequestTtl);
   }
 
   /// 打字配置（类成员变量，服务器重启前持久化）
@@ -1343,6 +1441,7 @@ class HttpServerService {
 
     await _loadTypingConfig();
     await _loadPointsExchangeConfig();
+    await _loadExamControlState();
     // 【在线升级】加载全局开关配置
     await _loadOnlineUpdateConfig();
     // 【在线升级】加载学生端版本上报汇总
@@ -1644,7 +1743,12 @@ class HttpServerService {
       try {
         final body = await request.readAsString();
         final data = json.decode(body) as Map<String, dynamic>;
-        _activeBank = data['bank'] as String?;
+        final bank = data['bank'] as String?;
+        if (bank == '__NO_EXAM__') {
+          return jsonResponse({'success': false, 'error': '无效题库'},
+              status: 400);
+        }
+        _activeBank = bank;
 
         // 从题库文件读取考试时间限制和提前交卷时间
         if (_activeBank != null) {
@@ -1668,6 +1772,118 @@ class HttpServerService {
       }
     });
 
+    // 获取课堂小测全局锁状态
+    router.get('/api/exam-control', (Request request) => jsonResponse({
+          'success': true,
+          'exam_entry_disabled': _examEntryDisabled,
+        }));
+
+    // 设置/解除课堂小测全局锁（「此时无法进入课堂小测」）
+    router.post('/api/exam-control', (Request request) async {
+      try {
+        final body = await request.readAsString();
+        final data = json.decode(body);
+        if (data is! Map) {
+          return jsonResponse({'success': false, 'error': '参数错误'},
+              status: 400);
+        }
+        final disabled = data['disabled'] == true;
+        if (disabled && !_examEntryDisabled) {
+          // 锁定时清空待收卷请求，避免解锁后立即误收卷
+          _collectRequests.clear();
+          await _saveCollectRequests();
+        }
+        _examEntryDisabled = disabled;
+        await _saveExamControlState();
+        AppLogger.log('课堂小测全局锁: $_examEntryDisabled');
+        return jsonResponse({
+          'success': true,
+          'exam_entry_disabled': _examEntryDisabled,
+        });
+      } catch (e) {
+        return jsonResponse(
+            {'success': false, 'error': '设置课堂小测状态失败: $e'},
+            status: 500);
+      }
+    });
+
+    // 下发收卷指令（仅对正在小测页面的学生生效，60 秒内有效）
+    router.post('/api/exam-collect', (Request request) async {
+      try {
+        if (_examEntryDisabled) {
+          return jsonResponse(
+              {'success': false, 'error': '当前已锁定课堂小测，无法收卷'},
+              status: 403);
+        }
+        final body = await request.readAsString();
+        final data = json.decode(body);
+        if (data is! Map) {
+          return jsonResponse({'success': false, 'error': '参数错误'},
+              status: 400);
+        }
+        final classId = data['class_id']?.toString() ?? '';
+        final requestedIds = (data['student_ids'] as List<dynamic>? ?? [])
+            .map((e) => e.toString())
+            .toSet();
+        if (classId.isEmpty || requestedIds.isEmpty) {
+          return jsonResponse({'success': false, 'error': '缺少班级或学生列表'},
+              status: 400);
+        }
+        final classStudentIds = loadClassStudents(classId)
+            .map((s) => s['id']?.toString() ?? '')
+            .toSet();
+        final targets = requestedIds.where(classStudentIds.contains).toList();
+        if (targets.isEmpty) {
+          return jsonResponse({'success': false, 'error': '所选学生不在该班级'},
+              status: 400);
+        }
+
+        final now = DateTime.now();
+        for (final id in targets) {
+          _collectRequests[id] = now;
+        }
+        _pruneCollectRequests();
+        await _saveCollectRequests();
+        AppLogger.log('下发收卷: $classId ${targets.length} 人');
+        return jsonResponse({'success': true, 'count': targets.length});
+      } catch (e) {
+        return jsonResponse({'success': false, 'error': '收卷失败: $e'},
+            status: 500);
+      }
+    });
+
+    // 学生端轮询：全局锁状态 + 本人收卷请求
+    router.get('/api/student-control', (Request request) {
+      _pruneCollectRequests();
+      final studentId = request.url.queryParameters['student_id'] ?? '';
+      final issuedAt = _collectRequests[studentId];
+      final collectRequested = issuedAt != null &&
+          DateTime.now().difference(issuedAt) <= _collectRequestTtl;
+      return jsonResponse({
+        'success': true,
+        'exam_entry_disabled': _examEntryDisabled,
+        'collect_requested': collectRequested,
+      });
+    });
+
+    // 学生交卷后确认收卷，避免重复触发
+    router.post('/api/exam-collect/ack', (Request request) async {
+      try {
+        final body = await request.readAsString();
+        final data = json.decode(body);
+        final studentId =
+            data is Map ? (data['student_id']?.toString() ?? '') : '';
+        if (studentId.isNotEmpty &&
+            _collectRequests.remove(studentId) != null) {
+          await _saveCollectRequests();
+        }
+        return jsonResponse({'success': true});
+      } catch (e) {
+        return jsonResponse({'success': false, 'error': '确认收卷失败: $e'},
+            status: 500);
+      }
+    });
+
     // 原子更新后续登录使用的班级和题库。已有学生会话不在此处重新认证或改写。
     router.post('/api/sync-config', (Request request) async {
       try {
@@ -1675,6 +1891,10 @@ class HttpServerService {
         final data = json.decode(body) as Map<String, dynamic>;
         final classId = data['class_id'] as String?;
         final bank = data['bank'] as String?;
+        if (bank == '__NO_EXAM__') {
+          return jsonResponse({'success': false, 'error': '无效题库'},
+              status: 400);
+        }
         if (classId == null ||
             classId.isEmpty ||
             bank == null ||
@@ -2055,6 +2275,13 @@ class HttpServerService {
               status: 400);
         }
 
+        if (_examEntryDisabled) {
+          return jsonResponse({
+            'success': false,
+            'error': '教师已设置此时无法进入课堂小测，暂不能交卷'
+          }, status: 403);
+        }
+
         final resolvedClassId =
             classId.isNotEmpty ? classId : _findClassByStudentId(studentId);
         if (resolvedClassId == null) {
@@ -2162,6 +2389,13 @@ class HttpServerService {
         if (studentId.isEmpty) {
           return jsonResponse({'success': false, 'error': '缺少student_id'},
               status: 400);
+        }
+
+        if (_examEntryDisabled) {
+          return jsonResponse({
+            'success': false,
+            'error': '教师已设置此时无法进入课堂小测，暂不能交卷'
+          }, status: 403);
         }
 
         final resolvedClassId =

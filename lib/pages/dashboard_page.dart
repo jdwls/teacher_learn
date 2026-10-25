@@ -26,6 +26,12 @@ class _DashboardPageState extends State<DashboardPage> {
   String? _selectedBank;
   int _classTotalCount = 0; // 班级总人数
   bool _isSyncing = false; // 同步按钮互斥锁
+  bool _isCollecting = false; // 收卷按钮互斥锁
+  bool _examEntryDisabled = false; // 是否禁止进入课堂小测（全局锁）
+  Set<String> _selectedStudentIds = <String>{}; // 已勾选学生
+
+  /// 题库下拉的特殊项：此时无法进入课堂小测
+  static const String _noExamOption = '__NO_EXAM__';
 
   final List<String> _grades = ['初一', '初二', '初三'];
   final List<String> _classes =
@@ -35,6 +41,7 @@ class _DashboardPageState extends State<DashboardPage> {
   void initState() {
     super.initState();
     _loadQuestionBanks();
+    _loadExamControlState();
     // 从 AuthProvider 恢复之前选择的班级
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _restoreClassSelection();
@@ -122,6 +129,131 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
+  /// 加载课堂小测全局锁状态
+  Future<void> _loadExamControlState() async {
+    try {
+      final response = await http
+          .get(Uri.parse('http://localhost:20020/api/exam-control'))
+          .timeout(const Duration(seconds: 5));
+      if (!mounted || response.statusCode != 200) return;
+      final data = json.decode(response.body);
+      if (data['success'] == true) {
+        setState(() {
+          _examEntryDisabled = data['exam_entry_disabled'] == true;
+        });
+      }
+    } catch (e) {
+      debugPrint('加载课堂小测状态失败: $e');
+    }
+  }
+
+  /// 设置/解除课堂小测全局锁
+  Future<bool> _setExamControl(bool disabled) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('http://localhost:20020/api/exam-control'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'disabled': disabled}),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (!mounted) return false;
+      if (_isResponseOk(response)) {
+        setState(() => _examEntryDisabled = disabled);
+        return true;
+      }
+      _showSnack('设置课堂小测状态失败', isError: true);
+    } catch (e) {
+      if (mounted) _showSnack('设置课堂小测状态失败: $e', isError: true);
+    }
+    return false;
+  }
+
+  void _showSnack(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : AppTheme.successGreen,
+      ),
+    );
+  }
+
+  /// 当前班级实际勾选人数
+  int _selectedCountOfCurrentClass() {
+    final classStudents = context
+        .read<StudentStatusProvider>()
+        .getStudentsByClass('$_selectedGrade$_selectedClass');
+    final ids = classStudents.map((s) => s.id).toSet();
+    return _selectedStudentIds.where(ids.contains).length;
+  }
+
+  /// 对勾选学生下发收卷指令
+  Future<void> _collectPapers() async {
+    if (_isCollecting) return;
+    if (_examEntryDisabled) {
+      _showSnack('当前已锁定课堂小测，无法收卷', isError: true);
+      return;
+    }
+
+    final classLabel = '$_selectedGrade$_selectedClass';
+    final classStudents = context
+        .read<StudentStatusProvider>()
+        .getStudentsByClass(classLabel);
+    final validIds = classStudents.map((s) => s.id).toSet();
+    final targets = _selectedStudentIds.where(validIds.contains).toList();
+    if (targets.isEmpty) {
+      _showSnack('请先勾选要收卷的学生', isError: true);
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('确认收卷'),
+        content: Text(
+            '确定对已选 ${targets.length} 名学生收卷？\n仅正在课堂小测页面的学生会立即交卷。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确定收卷'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _isCollecting = true);
+    try {
+      final response = await http
+          .post(
+            Uri.parse('http://localhost:20020/api/exam-collect'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'class_id': classLabel,
+              'student_ids': targets,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (!_isResponseOk(response)) {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+      final data = json.decode(response.body);
+      if (!mounted) return;
+      setState(() => _selectedStudentIds.clear());
+      _showSnack(
+          '收卷指令已发送（${data['count'] ?? targets.length} 人，仅小测页学生生效）');
+    } catch (e) {
+      if (mounted) _showSnack('收卷失败: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _isCollecting = false);
+    }
+  }
+
   /// 同步题库到学生端
   Future<String?> _syncBankToStudents(String bankName) async {
     try {
@@ -148,6 +280,8 @@ class _DashboardPageState extends State<DashboardPage> {
   /// 保存班级选择到 AuthProvider
   void _saveClassSelection() {
     if (!mounted) return;
+    // 切换班级时清空勾选，避免把上一个班级的选择带到新班级
+    setState(() => _selectedStudentIds.clear());
     final classLabel = '$_selectedGrade$_selectedClass';
     final authProvider = context.read<AuthProvider>();
     authProvider.setSelectedClass(classLabel);
@@ -188,6 +322,10 @@ class _DashboardPageState extends State<DashboardPage> {
   /// 同步到学生端。配置只影响后续登录和新打开的小测，已有会话保持不变。
   void _syncToStudents() async {
     if (_isSyncing) return;
+    if (_examEntryDisabled) {
+      _showSnack('当前为「此时无法进入课堂小测」，请先选择真实题库');
+      return;
+    }
     if (_selectedBank == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -406,7 +544,8 @@ class _DashboardPageState extends State<DashboardPage> {
           const SizedBox(width: 12),
           // 同步按钮
           ElevatedButton.icon(
-            onPressed: _isSyncing ? null : _syncToStudents,
+            onPressed:
+                (_isSyncing || _examEntryDisabled) ? null : _syncToStudents,
             icon: _isSyncing
                 ? const SizedBox(
                     width: 16,
@@ -518,7 +657,8 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
           // 同步按钮
           ElevatedButton.icon(
-            onPressed: _isSyncing ? null : _syncToStudents,
+            onPressed:
+                (_isSyncing || _examEntryDisabled) ? null : _syncToStudents,
             icon: _isSyncing
                 ? const SizedBox(
                     width: 16,
@@ -628,6 +768,34 @@ class _DashboardPageState extends State<DashboardPage> {
 
   /// 题库选择器
   Widget _buildBankSelector() {
+    final selectedValue = _examEntryDisabled ? _noExamOption : _selectedBank;
+    final bankItems = <DropdownMenuItem<String>>[
+      ..._questionBanks.map((bank) {
+        return DropdownMenuItem<String>(
+          value: bank,
+          child: Text(
+            bank.length > 7 ? '${bank.substring(0, 7)}...' : bank,
+            style: const TextStyle(fontSize: 12, color: AppTheme.primaryBlue),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        );
+      }),
+      DropdownMenuItem<String>(
+        value: _noExamOption,
+        child: Text(
+          '此时无法进入课堂小测',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: AppTheme.dangerRed,
+          ),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        ),
+      ),
+    ];
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
@@ -637,46 +805,51 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          value: _selectedBank,
+          value: selectedValue,
           hint: Text(
             '选择',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
           isExpanded: true,
-          menuMaxHeight: 48.0 * 5,
-          items: _questionBanks.map((bank) {
-            return DropdownMenuItem<String>(
-              value: bank,
-              child: Text(
-                bank.length > 7 ? '${bank.substring(0, 7)}...' : bank,
-                style:
-                    const TextStyle(fontSize: 12, color: AppTheme.primaryBlue),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
-              ),
-            );
-          }).toList(),
-          onChanged: (value) {
-            if (value != null) {
-              setState(() {
-                _selectedBank = value;
-              });
-              // 持久化题库选择到 JSON 文件
-              QuestionBankConfigService.setSelectedBank(value);
-              // 同步题库到学生端
-              _syncBankToStudents(value).then((result) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(result ?? '同步成功'),
-                      backgroundColor:
-                          result == '同步成功' ? Colors.green : Colors.red,
-                      duration: const Duration(seconds: 2),
-                    ),
-                  );
-                }
-              });
+          menuMaxHeight: 48.0 * 6,
+          items: bankItems,
+          onChanged: (value) async {
+            if (value == null) return;
+
+            // 选择「此时无法进入课堂小测」：只设置全局锁，不改变真实题库
+            if (value == _noExamOption) {
+              if (_examEntryDisabled) return;
+              final ok = await _setExamControl(true);
+              if (ok) {
+                _showSnack('已设置：学生此时无法进入课堂小测');
+              }
+              return;
             }
+
+            // 从全局锁切回真实题库：先解锁
+            if (_examEntryDisabled) {
+              final unlocked = await _setExamControl(false);
+              if (!unlocked) return;
+            }
+
+            setState(() {
+              _selectedBank = value;
+            });
+            // 持久化题库选择到 JSON 文件
+            QuestionBankConfigService.setSelectedBank(value);
+            // 同步题库到学生端
+            _syncBankToStudents(value).then((result) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(result ?? '同步成功'),
+                    backgroundColor:
+                        result == '同步成功' ? Colors.green : Colors.red,
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              }
+            });
           },
         ),
       ),
@@ -685,8 +858,79 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Widget _buildStudentCards() {
     final classLabel = '$_selectedGrade$_selectedClass';
-    return StudentStatusWidget(
-      classFilter: classLabel,
+    final selectedCount = _selectedCountOfCurrentClass();
+    final canCollect =
+        !_isCollecting && !_examEntryDisabled && selectedCount > 0;
+
+    return Column(
+      children: [
+        // 勾选与收卷操作栏
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: const BoxDecoration(
+            color: Color(0xFFF8FAFC),
+            border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+          ),
+          child: Row(
+            children: [
+              Text(
+                '已选 $selectedCount 人',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+              if (_examEntryDisabled) ...[
+                const SizedBox(width: 12),
+                Text(
+                  '课堂小测已锁定',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.dangerRed,
+                  ),
+                ),
+              ],
+              const Spacer(),
+              ElevatedButton.icon(
+                onPressed: canCollect ? _collectPapers : null,
+                icon: _isCollecting
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.inventory_2_outlined, size: 16),
+                label: Text(
+                  _isCollecting ? '收卷中…' : '收卷',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFEA580C),
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: StudentStatusWidget(
+            classFilter: classLabel,
+            selectedIds: _selectedStudentIds,
+            onSelectionChanged: (ids) =>
+                setState(() => _selectedStudentIds = ids),
+          ),
+        ),
+      ],
     );
   }
 }

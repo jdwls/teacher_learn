@@ -4,8 +4,15 @@ import '../providers/student_status_provider.dart';
 
 class StudentStatusWidget extends StatefulWidget {
   final String? classFilter;
+  final Set<String>? selectedIds;
+  final ValueChanged<Set<String>>? onSelectionChanged;
 
-  const StudentStatusWidget({super.key, this.classFilter});
+  const StudentStatusWidget({
+    super.key,
+    this.classFilter,
+    this.selectedIds,
+    this.onSelectionChanged,
+  });
 
   @override
   State<StudentStatusWidget> createState() => _StudentStatusWidgetState();
@@ -15,6 +22,12 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
   // 排序配置
   String _sortColumn = 'name';
   bool _sortAscending = true;
+
+  Set<String> get _selectedIds => widget.selectedIds ?? const <String>{};
+
+  void _emitSelection(Set<String> ids) {
+    widget.onSelectionChanged?.call(ids);
+  }
 
   void _toggleSort(String column) {
     setState(() {
@@ -102,8 +115,9 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
                           verticalInside: BorderSide(color: const Color(0xFFE2E8F0), width: 1),
                         ),
                         columnWidths: {
+                          0: const FixedColumnWidth(52),
                           for (int i = 0; i < _columns.length; i++)
-                            i: FlexColumnWidth(_columns[i].$3),
+                            i + 1: FlexColumnWidth(_columns[i].$3),
                         },
                         defaultVerticalAlignment:
                             TableCellVerticalAlignment.middle,
@@ -112,16 +126,19 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
                           TableRow(
                             decoration: const BoxDecoration(
                                 color: Color(0xFFF1F5F9)),
-                            children: List.generate(_columns.length, (i) {
-                              final (key, label, _) = _columns[i];
-                              final isSorted = _sortColumn == key;
-                              return _buildHeaderCell(
-                                label,
-                                isSorted: isSorted,
-                                ascending: _sortAscending,
-                                onTap: () => _toggleSort(key),
-                              );
-                            }),
+                            children: [
+                              _buildSelectAllCell(sorted),
+                              ...List.generate(_columns.length, (i) {
+                                final (key, label, _) = _columns[i];
+                                final isSorted = _sortColumn == key;
+                                return _buildHeaderCell(
+                                  label,
+                                  isSorted: isSorted,
+                                  ascending: _sortAscending,
+                                  onTap: () => _toggleSort(key),
+                                );
+                              }),
+                            ],
                           ),
                           // 数据行
                           for (int i = 0; i < sorted.length; i++)
@@ -132,6 +149,7 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
                                     : const Color(0xFFF8FAFC),
                               ),
                               children: [
+                                _buildRowCheckboxCell(sorted[i]),
                                 _buildCell(sorted[i].name, bold: true),
                                 _buildCell(sorted[i].classId),
                                 _buildCell(sorted[i].computerName),
@@ -196,6 +214,66 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
             fontWeight: bold ? FontWeight.w600 : FontWeight.w400,
           ),
           overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+
+  /// 表头全选复选框（支持全选 / 半选 / 取消）
+  Widget _buildSelectAllCell(List<StudentStatusInfo> students) {
+    final selectableIds = students.map((s) => s.id).toSet();
+    final selected = _selectedIds.intersection(selectableIds);
+    final allSelected =
+        selectableIds.isNotEmpty && selected.length == selectableIds.length;
+    final someSelected = selected.isNotEmpty && !allSelected;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+      child: Center(
+        child: Tooltip(
+          message: '全选 / 取消全选',
+          child: Checkbox(
+            tristate: true,
+            value: allSelected ? true : (someSelected ? null : false),
+            onChanged: widget.onSelectionChanged == null
+                ? null
+                : (_) {
+                    final next = Set<String>.from(_selectedIds);
+                    if (allSelected) {
+                      next.removeAll(selectableIds);
+                    } else {
+                      next.addAll(selectableIds);
+                    }
+                    _emitSelection(next);
+                  },
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 行内单选复选框
+  Widget _buildRowCheckboxCell(StudentStatusInfo student) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+      child: Center(
+        child: Checkbox(
+          value: _selectedIds.contains(student.id),
+          onChanged: widget.onSelectionChanged == null
+              ? null
+              : (checked) {
+                  final next = Set<String>.from(_selectedIds);
+                  if (checked == true) {
+                    next.add(student.id);
+                  } else {
+                    next.remove(student.id);
+                  }
+                  _emitSelection(next);
+                },
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
       ),
     );
