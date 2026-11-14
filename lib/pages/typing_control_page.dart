@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../theme/app_theme.dart';
 import '../services/typing_article_service.dart';
 import '../services/http_server_service.dart';
+import '../widgets/ai_assistant_panel.dart';
 
 /// 学生端控制页面
 class TypingControlPage extends StatefulWidget {
@@ -58,7 +59,7 @@ class _TypingControlPageState extends State<TypingControlPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _loadArticles();
     _loadSchedule();
     _onlineUpdateEnabled = HttpServerService.instance.onlineUpdateEnabled;
@@ -266,6 +267,7 @@ class _TypingControlPageState extends State<TypingControlPage>
               Tab(text: '打字配置'),
               Tab(text: '课表管理'),
               Tab(text: '在线升级'),
+              Tab(text: 'AI 助手'),
             ],
           ),
         ),
@@ -312,6 +314,16 @@ class _TypingControlPageState extends State<TypingControlPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _buildOnlineUpdatePanel(),
+                  ],
+                ),
+              ),
+              // Tab 4: AI 助手
+              SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AiAssistantPanel(),
                   ],
                 ),
               ),

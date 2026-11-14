@@ -9,6 +9,7 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 import 'typing_article_service.dart';
+import 'ai_assistant_service.dart';
 import '../utils/app_path.dart';
 
 /// HTTP API 服务器服务
@@ -781,6 +782,25 @@ class HttpServerService {
     }
   }
 
+  /// 写入并回读核验：确认带 [submissionId] 的记录已真实落盘。
+  ///
+  /// "已落盘" = 原子写入成功（flush + JSON 校验 + rename）且重新读取文件
+  /// 能找到该 `submission_id` 的记录；仅写入成功但回读不到时视为未落盘。
+  Future<bool> _writeAndVerifyRecord(
+    String classId,
+    String fileName,
+    String submissionId,
+    void Function(Map<String, dynamic> data) updater,
+  ) async {
+    final written = await _withScoreFileLock(classId, fileName, updater);
+    if (!written) return false;
+    if (submissionId.isEmpty) return true;
+    final data = await _readScoreFileAsync(classId, fileName);
+    final records = (data['records'] as List<dynamic>?) ?? <dynamic>[];
+    return records.any(
+        (r) => r is Map && r['submission_id']?.toString() == submissionId);
+  }
+
   final Map<String, int> _studentPointsCache = {};
   final Map<String, int> _todayPointsCache = {};
 
@@ -1360,7 +1380,8 @@ class HttpServerService {
   }
 
   Future<Map<String, dynamic>?> findStudentByDevice(
-      String computerName, String ip) async {
+      String computerName, String ip,
+      {String studentId = ''}) async {
     // 学生登录范围严格限定为教师最近一次同步的活跃班级，避免跨班自动登录。
     if (_activeClass.isEmpty) return null;
     // 【热更新】查找前强制重读磁盘最新名单，确保教师端保存/删除学生立即生效
@@ -1369,19 +1390,49 @@ class HttpServerService {
     // 电脑名按忽略大小写比较（Windows 主机名可能存在大小写差异，之前精确匹配会导致设备匹配失败，学生端无法自动登录）
     String normName(String? v) => (v ?? '').trim().toLowerCase();
     final nComputerName = normName(computerName);
-    // 允许 DHCP 更换 IP。
-    for (final s in students) {
-      final sIp = (s['ip'] ?? '').toString().trim();
-      if (normName(s['computer_name'] ?? '') == normName(computerName) && sIp == ip.trim()) return s;
-    }
 
-    if (nComputerName.isNotEmpty) {
+    // 1) 优先按学生端上次登录的学生 id 命中：
+    //    同一台电脑可能被多名学生注册过（computer_name 相同），
+    //    用 id 可以确保自动登录回本机上一次登录的那名学生。
+    //    同时要求该学生的电脑名与本机一致，避免配置文件被拷到别的机器后串号。
+    if (studentId.isNotEmpty && nComputerName.isNotEmpty) {
       for (final s in students) {
-        if (normName(s['computer_name'] ?? '') == normName(computerName)) return s;
+        if (s['id']?.toString() != studentId) continue;
+        if (normName(s['computer_name'] ?? '') == nComputerName) return s;
       }
     }
 
-    return null;
+    // 2) 电脑名 + IP 精确匹配（允许 DHCP 更换 IP，故后面还有电脑名兜底）
+    if (nComputerName.isNotEmpty) {
+      for (final s in students) {
+        final sIp = (s['ip'] ?? '').toString().trim();
+        if (normName(s['computer_name'] ?? '') == nComputerName &&
+            sIp == ip.trim()) {
+          return s;
+        }
+      }
+    }
+
+    // 3) 仅按电脑名兜底：命中多条时取最近登录/心跳的一条，
+    //    不能直接返回列表第一条，否则会登成同机名的其他学生。
+    if (nComputerName.isEmpty) return null;
+    final matched = students
+        .where((s) => normName(s['computer_name'] ?? '') == nComputerName)
+        .toList();
+    if (matched.isEmpty) return null;
+    if (matched.length == 1) return matched.first;
+
+    DateTime lastActiveAt(Map<String, dynamic> s) {
+      var latest = DateTime.fromMillisecondsSinceEpoch(0);
+      for (final key in ['last_login', 'last_heartbeat', 'register_time']) {
+        final parsed = DateTime.tryParse(s[key]?.toString() ?? '');
+        if (parsed != null && parsed.isAfter(latest)) latest = parsed;
+      }
+      return latest;
+    }
+
+    matched.sort((a, b) => lastActiveAt(b).compareTo(lastActiveAt(a)));
+    return matched.first;
   }
 
   /// 更新学生积分（统一账本方案）：
@@ -1446,6 +1497,8 @@ class HttpServerService {
     await _loadOnlineUpdateConfig();
     // 【在线升级】加载学生端版本上报汇总
     await _loadStudentVersions();
+    // 【AI 助手】加载配置 + 初始化历史文件
+    await AiAssistantService.instance.init();
 
     // 【修复】启动时预填充 _studentCache，避免登录时找不到已有学生
     await _preloadStudentCache();
@@ -1518,6 +1571,29 @@ class HttpServerService {
           }
         }
 
+        // 未在当前活跃班级命中：检查该学生是否在其他班级，
+        // 给出明确提示，避免学生把「不在上课班级」误认为「教师端没开 / 密码错误」。
+        try {
+          final allClassIds = await getAllClassIdsAsync();
+          for (final classId in allClassIds) {
+            if (classId == _activeClass) continue;
+            await refreshClassFromDisk(classId);
+            final students = await loadClassStudentsAsync(classId);
+            for (final s in students) {
+              if (s['name'] == name && s['password'] == password) {
+                return jsonResponse({
+                  'success': false,
+                  'error_code': 'not_in_active_class',
+                  'message':
+                      '你不在当前上课班级（$_activeClass），请等待老师切换班级后再登录',
+                }, status: 403);
+              }
+            }
+          }
+        } catch (e) {
+          AppLogger.log('跨班查找学生失败: $e');
+        }
+
         return jsonResponse(
             {'success': false, 'message': '姓名或密码错误，请确认已在当前班级注册'},
             status: 401);
@@ -1550,6 +1626,24 @@ class HttpServerService {
             existingStudents.indexWhere((s) => s['name'] == name);
         if (existingIndex != -1) {
           final existing = existingStudents[existingIndex];
+          // 【CR4-01 修复】同名注册必须能证明"是本人"：
+          //   ① 密码一致；或 ② 同一台电脑（computer_name 一致，忽略大小写）。
+          // 二者都不满足时拒绝，避免知道姓名即可改密码接管账号。
+          final existingPassword = existing['password']?.toString() ?? '';
+          final samePassword = existingPassword == password;
+          final existingComputer =
+              (existing['computer_name']?.toString() ?? '').trim();
+          final sameDevice = computerName.trim().isNotEmpty &&
+              existingComputer.toLowerCase() ==
+                  computerName.trim().toLowerCase();
+          if (!samePassword && !sameDevice) {
+            AppLogger.log('拒绝同名注册(疑似冒名): $name 班级=$classId');
+            return jsonResponse({
+              'success': false,
+              'error_code': 'name_taken',
+              'message': '该姓名已在班级注册，请直接登录；忘记密码请联系教师重置',
+            }, status: 409);
+          }
           existing['password'] = password;
           existing['computer_name'] = computerName;
           existing['ip'] = ip;
@@ -2161,9 +2255,14 @@ class HttpServerService {
         final data = json.decode(body) as Map<String, dynamic>;
         final computerName = data['computer_name'] ?? '';
         final ip = data['ip'] ?? '';
-        final foundStudent = await findStudentByDevice(computerName, ip);
+        final studentId = data['student_id']?.toString() ?? '';
+        final foundStudent = await findStudentByDevice(computerName, ip,
+            studentId: studentId);
         if (foundStudent != null) {
-          return jsonResponse({'student': foundStudent});
+          // 【CR4-04 修复】自动登录只需要身份与班级，绝不能把密码回传给客户端。
+          final safeStudent = Map<String, dynamic>.from(foundStudent)
+            ..remove('password');
+          return jsonResponse({'student': safeStudent});
         } else {
           return jsonResponse({'student': null});
         }
@@ -2174,19 +2273,46 @@ class HttpServerService {
     });
 
     // 学生注册接口
+    // 【CR4-02 修复】不再信任客户端传入的 id：
+    //   - 优先按 name 定位同班已有学生，仅更新设备信息，绝不覆盖密码/积分；
+    //   - 找不到才新建，id 由服务端生成。
+    // 这样即使伪造请求传别人的 id，也无法覆盖他人档案。
     router.post('/api/student/register', (Request request) async {
       try {
         final body = await request.readAsString();
         final data = json.decode(body) as Map<String, dynamic>;
         final classId = data['class_id'] as String? ?? '';
+        final name = data['name']?.toString().trim() ?? '';
         if (classId.isEmpty) {
           return jsonResponse({'success': false, 'error': '缺少class_id'},
               status: 400);
         }
+        if (name.isEmpty) {
+          return jsonResponse({'success': false, 'error': '缺少name'},
+              status: 400);
+        }
+
+        final students = loadClassStudents(classId);
+        final existingIndex =
+            students.indexWhere((s) => s['name']?.toString() == name);
+
+        if (existingIndex != -1) {
+          final existing = students[existingIndex];
+          existing['computer_name'] =
+              data['computer_name'] ?? existing['computer_name'] ?? '';
+          existing['ip'] = data['ip'] ?? existing['ip'] ?? '';
+          existing['class_id'] = classId;
+          await saveStudentToClass(classId, existing);
+          final safeExisting = Map<String, dynamic>.from(existing)
+            ..remove('password');
+          AppLogger.log('学生设备信息已更新: $name (班级: $classId)');
+          return jsonResponse(
+              {'success': true, 'message': '已更新', 'student': safeExisting});
+        }
 
         final student = {
-          'id': data['id'] ?? (_nextStudentId++).toString(),
-          'name': data['name'] ?? '',
+          'id': (_nextStudentId++).toString(),
+          'name': name,
           'password': data['password'] ?? '',
           'class_id': classId,
           'computer_name': data['computer_name'] ?? '',
@@ -2195,9 +2321,11 @@ class HttpServerService {
           'register_time': DateTime.now().toIso8601String(),
         };
         await saveStudentToClass(classId, student);
-        AppLogger.log('学生已注册到班级 $classId: ${student['name']}');
+        final safeStudent = Map<String, dynamic>.from(student)
+          ..remove('password');
+        AppLogger.log('学生已注册到班级 $classId: $name');
         return jsonResponse(
-            {'success': true, 'message': '注册成功', 'student': student});
+            {'success': true, 'message': '注册成功', 'student': safeStudent});
       } catch (e) {
         return jsonResponse({'success': false, 'error': '注册失败: $e'},
             status: 500);
@@ -2269,6 +2397,7 @@ class HttpServerService {
         final classId = data['class_id'] as String? ?? '';
         final questionsDetail =
             data['questions_detail'] as List<dynamic>? ?? [];
+        final rawSubmissionId = data['submission_id']?.toString().trim() ?? '';
 
         if (studentId.isEmpty) {
           return jsonResponse({'success': false, 'error': '缺少student_id'},
@@ -2292,62 +2421,109 @@ class HttpServerService {
         // 计算积分
         final points = (score * 0.1).round();
 
-        final examSaved =
-            await _withScoreFileLock(resolvedClassId, '小测成绩表.json', (examData) {
+        // 幂等键：旧版客户端未携带时按学生+时间生成，保证记录可被核验
+        final submissionId = rawSubmissionId.isNotEmpty
+            ? rawSubmissionId
+            : '${studentId}_exam_${DateTime.now().millisecondsSinceEpoch}';
+        final persistedAt = DateTime.now().toIso8601String();
+
+        // 成绩落盘 + 回读核验（同一 submission_id 只记一次）
+        var duplicateExam = false;
+        final examSaved = await _writeAndVerifyRecord(
+            resolvedClassId, '小测成绩表.json', submissionId, (examData) {
           final records = (examData['records'] as List<dynamic>?) ?? [];
+          final isDuplicate = records.any(
+              (r) => r is Map && r['submission_id']?.toString() == submissionId);
+          if (isDuplicate) {
+            duplicateExam = true;
+            return;
+          }
           records.add({
+            'submission_id': submissionId,
             'student_id': studentId,
             'student_name': studentName,
             'exam_name': bankName,
             'score': score,
             'points': points,
-            'submit_time': DateTime.now().toIso8601String(),
+            'submit_time': persistedAt,
+            'persisted_at': persistedAt,
           });
         });
 
         if (!examSaved) {
-          return jsonResponse({'success': false, 'error': '成绩写入失败，请稍后重试'},
-              status: 503);
+          return jsonResponse({
+            'success': false,
+            'saved': false,
+            'verified': false,
+            'submission_id': submissionId,
+            'error': '成绩写入失败，请稍后重试'
+          }, status: 503);
         }
 
-        // 保存错题记录
+        // 保存错题记录（落盘 + 回读核验，幂等）
         final wrongQuestions =
             questionsDetail.where((q) => q['is_correct'] == false).toList();
         final wrongCount = wrongQuestions.length;
         final totalCount = questionsDetail.length;
 
-        final wrongSaved =
-            await _withScoreFileLock(resolvedClassId, '错题记录.json', (wrongData) {
+        final wrongSaved = await _writeAndVerifyRecord(
+            resolvedClassId, '错题记录.json', submissionId, (wrongData) {
           final records = (wrongData['records'] as List<dynamic>?) ?? [];
+          final isDuplicate = records.any(
+              (r) => r is Map && r['submission_id']?.toString() == submissionId);
+          if (isDuplicate) return;
           records.add({
+            'submission_id': submissionId,
             'student_id': studentId,
             'student_name': studentName,
             'exam_name': bankName,
-            'submit_time': DateTime.now().toIso8601String(),
+            'submit_time': persistedAt,
+            'persisted_at': persistedAt,
             'wrong_questions': wrongQuestions,
             'wrong_count': wrongCount,
             'total_count': totalCount,
           });
         });
         if (!wrongSaved) {
-          return jsonResponse({'success': false, 'error': '错题记录写入失败，请稍后重试'},
-              status: 503);
+          return jsonResponse({
+            'success': false,
+            'saved': false,
+            'verified': false,
+            'submission_id': submissionId,
+            'error': '错题记录写入失败，请稍后重试'
+          }, status: 503);
         }
 
-        // 记录积分变动明细（积分增加详细表），供学生端积分变化图表使用
+        // 记录积分变动明细（积分增加详细表），落盘 + 回读核验，幂等
+        var pointsSaved = true;
         if (points > 0) {
-          await _withScoreFileLock(resolvedClassId, '积分增加详细表.json',
+          pointsSaved = await _writeAndVerifyRecord(
+              resolvedClassId, '积分增加详细表.json', submissionId,
               (pointsData) {
             final records = (pointsData['records'] as List<dynamic>?) ?? [];
+            final isDuplicate = records.any((r) =>
+                r is Map && r['submission_id']?.toString() == submissionId);
+            if (isDuplicate) return;
             records.add({
+              'submission_id': submissionId,
               'student_id': studentId,
               'student_name': studentName,
               'points': points,
-              'date': DateTime.now().toIso8601String(),
+              'date': persistedAt,
               'source': 'exam',
               'exam_name': bankName,
+              'persisted_at': persistedAt,
             });
           });
+          if (!pointsSaved) {
+            return jsonResponse({
+              'success': false,
+              'saved': false,
+              'verified': false,
+              'submission_id': submissionId,
+              'error': '积分记录写入失败，请稍后重试'
+            }, status: 503);
+          }
         }
 
         // 即使本次 0 分，也要保证总积分缓存已初始化，避免返回 0 覆盖学生端积分
@@ -2359,15 +2535,28 @@ class HttpServerService {
         final totalPoints = _studentPointsCache[studentId] ??
             _storedStudentPoints(resolvedClassId, studentId);
 
-        AppLogger.log('答卷已保存: $studentName - $bankName - 得分$score');
+        AppLogger.log('答卷已保存: $studentName - $bankName - 得分$score'
+            '${duplicateExam ? '（重复提交，已幂等忽略）' : ''}');
         return jsonResponse({
           'success': true,
           'message': '提交成功',
+          'saved': true,
+          'verified': true,
+          'duplicate': duplicateExam,
+          'submission_id': submissionId,
+          'record_id': submissionId,
+          'persisted_at': persistedAt,
+          'files': {
+            '成绩': examSaved,
+            '错题': wrongSaved,
+            '积分': pointsSaved,
+          },
           'data': {
             'score': score,
             'points': points,
             'total_points': totalPoints,
-          }
+          },
+          'total_points': totalPoints,
         });
       } catch (e) {
         return jsonResponse({'success': false, 'error': '提交答卷失败: $e'},
@@ -2452,7 +2641,7 @@ class HttpServerService {
       try {
         final body = await request.readAsString();
         final data = json.decode(body) as Map<String, dynamic>;
-        final submissionId = data['submission_id']?.toString() ?? '';
+        final rawSubmissionId = data['submission_id']?.toString().trim() ?? '';
         final studentId = data['student_id'] as String? ?? '';
         final studentName = data['student_name'] as String? ?? '';
         final type = data['type'] as String? ?? '';
@@ -2479,18 +2668,24 @@ class HttpServerService {
         }
 
         bool isDuplicate = false;
-        final typingSaved = await _withScoreFileLock(
-            resolvedClassId, '中英文打字成绩表.json', (typingData) {
+
+        // 幂等键：旧版客户端未携带时按学生+时间生成，保证记录可被核验
+        final submissionId = rawSubmissionId.isNotEmpty
+            ? rawSubmissionId
+            : '${studentId}_typing_${DateTime.now().millisecondsSinceEpoch}';
+        final persistedAt = DateTime.now().toIso8601String();
+
+        // 成绩落盘 + 回读核验（同一 submission_id 只记一次）
+        final typingSaved = await _writeAndVerifyRecord(
+            resolvedClassId, '中英文打字成绩表.json', submissionId,
+            (typingData) {
           final records = (typingData['records'] as List<dynamic>?) ?? [];
           // 幂等：按 submission_id 查重，重复提交直接返回现有积分
-          if (submissionId.isNotEmpty) {
-            final existing = records
-                .cast<Map<String, dynamic>>()
-                .where((r) => r['submission_id']?.toString() == submissionId);
-            if (existing.isNotEmpty) {
-              isDuplicate = true;
-              return;
-            }
+          final existing = records.any(
+              (r) => r is Map && r['submission_id']?.toString() == submissionId);
+          if (existing) {
+            isDuplicate = true;
+            return;
           }
           records.add({
             'submission_id': submissionId,
@@ -2505,29 +2700,50 @@ class HttpServerService {
             'correct_chars': correctChars,
             'total_chars': totalChars,
             'error_count': errorCount,
-            'submit_time': DateTime.now().toIso8601String(),
+            'submit_time': persistedAt,
+            'persisted_at': persistedAt,
           });
         });
 
         if (!typingSaved) {
-          return jsonResponse({'success': false, 'error': '打字成绩写入失败，请稍后重试'},
-              status: 503);
+          return jsonResponse({
+            'success': false,
+            'saved': false,
+            'verified': false,
+            'submission_id': submissionId,
+            'error': '打字成绩写入失败，请稍后重试'
+          }, status: 503);
         }
 
         if (points > 0 && !isDuplicate) {
-          // 记录积分变动明细（积分增加详细表），供学生端积分变化图表使用
-          await _withScoreFileLock(resolvedClassId, '积分增加详细表.json',
+          // 记录积分变动明细（积分增加详细表），落盘 + 回读核验
+          final pointsSaved = await _writeAndVerifyRecord(
+              resolvedClassId, '积分增加详细表.json', submissionId,
               (pointsData) {
             final records = (pointsData['records'] as List<dynamic>?) ?? [];
+            final existing = records.any((r) =>
+                r is Map && r['submission_id']?.toString() == submissionId);
+            if (existing) return;
             records.add({
+              'submission_id': submissionId,
               'student_id': studentId,
               'student_name': studentName,
               'points': points,
-              'date': DateTime.now().toIso8601String(),
+              'date': persistedAt,
               'source': 'typing',
               'type': type,
+              'persisted_at': persistedAt,
             });
           });
+          if (!pointsSaved) {
+            return jsonResponse({
+              'success': false,
+              'saved': false,
+              'verified': false,
+              'submission_id': submissionId,
+              'error': '积分记录写入失败，请稍后重试'
+            }, status: 503);
+          }
         }
 
         // 0 分或重复提交时同样要保证缓存已初始化，否则会返回 0 把学生端积分清空
@@ -2541,13 +2757,89 @@ class HttpServerService {
             _storedStudentPoints(resolvedClassId, studentId);
 
         final typeName = type == 'chinese' ? '中文打字' : '英文打字';
-        AppLogger.log('打字成绩已保存: $studentName - $typeName - 得分$score');
+        AppLogger.log('打字成绩已保存: $studentName - $typeName - 得分$score'
+            '${isDuplicate ? '（重复提交，已幂等忽略）' : ''}');
         return jsonResponse({
           'success': true,
+          'saved': true,
+          'verified': true,
+          'duplicate': isDuplicate,
+          'submission_id': submissionId,
+          'record_id': submissionId,
+          'persisted_at': persistedAt,
+          'files': {'成绩': true, '积分': true},
           'total_points': totalPoints,
         });
       } catch (e) {
         return jsonResponse({'success': false, 'error': '保存打字成绩失败: $e'},
+            status: 500);
+      }
+    });
+
+    // 提交状态核验：客户端超时/断网后查询记录是否已落盘，
+    // 命中即视为提交成功，避免"已落盘却重放"造成重复计分。
+    router.post('/api/submission/verify', (Request request) async {
+      try {
+        final body = await request.readAsString();
+        final data = json.decode(body) as Map<String, dynamic>;
+        final submissionId = data['submission_id']?.toString().trim() ?? '';
+        final kind = data['kind']?.toString() ?? '';
+        final studentId = data['student_id']?.toString() ?? '';
+        final classId = data['class_id']?.toString() ?? '';
+
+        if (submissionId.isEmpty) {
+          return jsonResponse({'success': false, 'error': '缺少submission_id'},
+              status: 400);
+        }
+
+        final resolvedClassId =
+            classId.isNotEmpty ? classId : _findClassByStudentId(studentId);
+        if (resolvedClassId == null) {
+          return jsonResponse({
+            'success': true,
+            'found': false,
+            'submission_id': submissionId,
+          });
+        }
+
+        final List<String> fileNames;
+        if (kind == 'typing') {
+          fileNames = const ['中英文打字成绩表.json'];
+        } else if (kind == 'exam') {
+          fileNames = const ['小测成绩表.json'];
+        } else {
+          fileNames = const ['小测成绩表.json', '中英文打字成绩表.json'];
+        }
+
+        for (final fileName in fileNames) {
+          final fileData = await _readScoreFileAsync(resolvedClassId, fileName);
+          final records = (fileData['records'] as List<dynamic>?) ?? <dynamic>[];
+          for (final r in records) {
+            if (r is! Map) continue;
+            if (r['submission_id']?.toString() != submissionId) continue;
+            return jsonResponse({
+              'success': true,
+              'found': true,
+              'submission_id': submissionId,
+              'record_id': submissionId,
+              'persisted_at': r['persisted_at']?.toString() ?? '',
+              'score': (r['score'] as num?)?.toInt() ?? 0,
+              'points': (r['points'] as num?)?.toInt() ?? 0,
+              'total_points': studentId.isEmpty
+                  ? 0
+                  : (_studentPointsCache[studentId] ??
+                      _storedStudentPoints(resolvedClassId, studentId)),
+            });
+          }
+        }
+
+        return jsonResponse({
+          'success': true,
+          'found': false,
+          'submission_id': submissionId,
+        });
+      } catch (e) {
+        return jsonResponse({'success': false, 'error': '核验提交状态失败: $e'},
             status: 500);
       }
     });
@@ -2941,6 +3233,218 @@ class HttpServerService {
         'success': true,
         'records': records,
       });
+    });
+
+    // ============ AI 助手 API ============
+
+    /// 学生端读取 AI 助手配置（**不返回 API Key**）
+    router.get('/api/ai/config', (Request request) {
+      final ai = AiAssistantService.instance;
+      return jsonResponse({
+        'success': true,
+        ...ai.publicConfig,
+      });
+    });
+
+    /// 学生端提问：教师端代理调用上游大模型，Key 只留在教师端
+    router.post('/api/ai/chat', (Request request) async {
+      try {
+        final body = await request.readAsString();
+        final data = json.decode(body) as Map<String, dynamic>;
+        final studentId = data['student_id']?.toString() ?? '';
+        final studentName = data['student_name']?.toString() ?? '';
+        final classId = data['class_id']?.toString() ?? '';
+        final message = data['message']?.toString() ?? '';
+        final sessionId = data['session_id']?.toString() ?? '';
+
+        final result = await AiAssistantService.instance.chat(
+          studentId: studentId,
+          studentName: studentName,
+          classId: classId,
+          message: message,
+          sessionId: sessionId,
+        );
+
+        if (!result.success) {
+          return jsonResponse({
+            'success': false,
+            'error': result.error,
+          }, status: result.statusCode);
+        }
+
+        return jsonResponse({
+          'success': true,
+          'reply': result.reply,
+          'model': result.model,
+          'created_at': result.createdAt,
+          'session_id': result.sessionId,
+          'remaining_quota': result.remainingQuota,
+        });
+      } catch (e) {
+        AppLogger.log('AI 提问接口异常: $e');
+        return jsonResponse({'success': false, 'error': 'AI 提问失败: $e'},
+            status: 500);
+      }
+    });
+
+    /// 学生端流式提问：教师端透传上游 SSE
+    ///
+    /// 前置校验失败（未开启/无 Key/配额用尽/超长）直接返回 JSON + 状态码；
+    /// 校验通过则返回 `text/event-stream`，事件格式见 [AiStreamChunk.toJson]。
+    router.post('/api/ai/chat/stream', (Request request) async {
+      Map<String, dynamic> data;
+      try {
+        final body = await request.readAsString();
+        data = json.decode(body) as Map<String, dynamic>;
+      } catch (e) {
+        return jsonResponse({'success': false, 'error': '请求体解析失败'},
+            status: 400);
+      }
+
+      final studentId = data['student_id']?.toString() ?? '';
+      final studentName = data['student_name']?.toString() ?? '';
+      final classId = data['class_id']?.toString() ?? '';
+      final message = data['message']?.toString() ?? '';
+      final sessionId = data['session_id']?.toString() ?? '';
+
+      final ai = AiAssistantService.instance;
+
+      // 前置校验：失败时不走 SSE，直接返回 JSON（学生端按状态码处理）
+      final trimmed = message.trim();
+      if (trimmed.isEmpty) {
+        return jsonResponse({'success': false, 'error': '提问内容不能为空'},
+            status: 400);
+      }
+      if (trimmed.length > AiAssistantService.maxMessageLength) {
+        return jsonResponse({
+          'success': false,
+          'error': '提问内容过长（最多 ${AiAssistantService.maxMessageLength} 字）'
+        }, status: 400);
+      }
+      if (!ai.enabled) {
+        return jsonResponse({'success': false, 'error': '教师尚未开启 AI 助手'},
+            status: 403);
+      }
+      if (!ai.hasApiKey) {
+        return jsonResponse(
+            {'success': false, 'error': '教师尚未配置 AI 的 API Key'},
+            status: 503);
+      }
+      if (studentId.trim().isEmpty) {
+        return jsonResponse({'success': false, 'error': '缺少学生身份信息'},
+            status: 400);
+      }
+      if (ai.todayRemainingCount(studentId) <= 0) {
+        final used = ai.todayUsedCount(studentId);
+        return jsonResponse({
+          'success': false,
+          'error': '今日 AI 提问次数已用完（$used/${ai.maxRequestsPerDay}），明天再来吧'
+        }, status: 429);
+      }
+
+      // 转换为 SSE 字节流
+      Stream<List<int>> sseBody() async* {
+        await for (final chunk in ai.chatStream(
+          studentId: studentId,
+          studentName: studentName,
+          classId: classId,
+          message: message,
+          sessionId: sessionId,
+        )) {
+          yield utf8.encode('data: ${json.encode(chunk.toJson())}\n\n');
+        }
+        yield utf8.encode('data: [DONE]\n\n');
+      }
+
+      return Response.ok(sseBody(), headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        // 防止反向代理缓冲，保证逐块下发
+        'X-Accel-Buffering': 'no',
+      });
+    });
+
+    /// 学生端读取自己的历史对话（可按 session_id 过滤）
+    router.get('/api/ai/history', (Request request) async {
+      try {
+        final studentId = request.url.queryParameters['student_id'] ?? '';
+        final sessionId = request.url.queryParameters['session_id'] ?? '';
+        final limitStr = request.url.queryParameters['limit'] ?? '';
+        final limit = int.tryParse(limitStr) ?? 200;
+        final records = await AiAssistantService.instance.loadHistory(
+          studentId: studentId.isEmpty ? null : studentId,
+          sessionId: sessionId.isEmpty ? null : sessionId,
+          limit: limit.clamp(1, 500),
+        );
+        return jsonResponse({
+          'success': true,
+          'records': records,
+        });
+      } catch (e) {
+        AppLogger.log('读取 AI 历史接口异常: $e');
+        return jsonResponse({'success': false, 'error': '读取历史失败: $e'},
+            status: 500);
+      }
+    });
+
+    /// 学生端读取自己的会话列表（右侧历史栏）
+    router.get('/api/ai/sessions', (Request request) async {
+      try {
+        final studentId = request.url.queryParameters['student_id'] ?? '';
+        if (studentId.isEmpty) {
+          return jsonResponse({'success': false, 'error': '缺少student_id'},
+              status: 400);
+        }
+        final sessions =
+            await AiAssistantService.instance.loadSessions(studentId);
+        return jsonResponse({
+          'success': true,
+          'sessions': sessions,
+        });
+      } catch (e) {
+        AppLogger.log('读取 AI 会话列表接口异常: $e');
+        return jsonResponse({'success': false, 'error': '读取会话列表失败: $e'},
+            status: 500);
+      }
+    });
+
+    /// 学生端查询自己今日剩余提问次数
+    router.get('/api/ai/quota', (Request request) {
+      final studentId = request.url.queryParameters['student_id'] ?? '';
+      if (studentId.isEmpty) {
+        return jsonResponse({'success': false, 'error': '缺少student_id'},
+            status: 400);
+      }
+      final ai = AiAssistantService.instance;
+      return jsonResponse({
+        'success': true,
+        'limit': ai.maxRequestsPerDay,
+        'used': ai.todayUsedCount(studentId),
+        'remaining': ai.todayRemainingCount(studentId),
+      });
+    });
+
+    /// 学生端清空自己的历史对话
+    router.delete('/api/ai/history', (Request request) async {
+      try {
+        final studentId = request.url.queryParameters['student_id'] ?? '';
+        if (studentId.isEmpty) {
+          return jsonResponse({'success': false, 'error': '缺少student_id'},
+              status: 400);
+        }
+        final cleared = await AiAssistantService.instance
+            .clearHistory(studentId: studentId);
+        if (!cleared) {
+          return jsonResponse({'success': false, 'error': '清空历史失败'},
+              status: 500);
+        }
+        return jsonResponse({'success': true});
+      } catch (e) {
+        AppLogger.log('清空 AI 历史接口异常: $e');
+        return jsonResponse({'success': false, 'error': '清空历史失败: $e'},
+            status: 500);
+      }
     });
 
     // ============ 在线升级 API ============

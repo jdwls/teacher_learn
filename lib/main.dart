@@ -183,6 +183,20 @@ class _MainNavigationPageState extends State<MainNavigationPage>
 
   /// 根据课表自动选择班级
   Future<void> _autoSelectClassFromSchedule() async {
+    // 优先恢复老师上次明确选择的班级：避免教师端重启后活跃班级被课表/默认值覆盖，
+    // 导致其他班学生无法登录/自动登录。
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedClass = prefs.getString('selected_class_label') ?? '';
+      if (savedClass.isNotEmpty &&
+          Directory('${AppPath.informationDir}/$savedClass').existsSync()) {
+        AppLogger.log('启动恢复上次选择的班级: $savedClass');
+        await _applyClass(savedClass);
+        return;
+      }
+    } catch (e) {
+      AppLogger.log('恢复上次选择的班级失败: $e');
+    }
     try {
       // 读取课表文件
       final scheduleFile =

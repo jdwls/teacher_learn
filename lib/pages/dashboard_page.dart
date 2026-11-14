@@ -10,6 +10,7 @@ import '../providers/user_provider.dart';
 import '../providers/exam_provider.dart';
 import '../providers/student_status_provider.dart';
 import '../theme/app_theme.dart';
+import '../widgets/student_detail_dialog.dart';
 import '../widgets/student_status_widget.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -322,29 +323,25 @@ class _DashboardPageState extends State<DashboardPage> {
   /// 同步到学生端。配置只影响后续登录和新打开的小测，已有会话保持不变。
   void _syncToStudents() async {
     if (_isSyncing) return;
-    if (_examEntryDisabled) {
-      _showSnack('当前为「此时无法进入课堂小测」，请先选择真实题库');
-      return;
-    }
-    if (_selectedBank == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('请先选择一个题库'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
     setState(() => _isSyncing = true);
 
     final classLabel = '$_selectedGrade$_selectedClass';
 
     try {
+      // 先同步班级：即使题库未选/不可用，也要保证学生能按当前班级登录
+      await _syncActiveClassOnly(classLabel);
+
+      final bank = _selectedBank;
+      if (_examEntryDisabled || bank == null || bank == _noExamOption) {
+        _showSnack('已同步班级 "$classLabel"（题库未同步，课堂小测暂不可用）');
+        return;
+      }
+
       final response = await http
           .post(
             Uri.parse('http://localhost:20020/api/sync-config'),
             headers: {'Content-Type': 'application/json'},
-            body: json.encode({'class_id': classLabel, 'bank': _selectedBank}),
+            body: json.encode({'class_id': classLabel, 'bank': bank}),
           )
           .timeout(const Duration(seconds: 10));
       if (!_isResponseOk(response)) {
@@ -374,6 +371,20 @@ class _DashboardPageState extends State<DashboardPage> {
       } else {
         _isSyncing = false;
       }
+    }
+  }
+
+  /// 只同步活跃班级（题库未选/不可用时也要保证学生能按当前班级登录）。
+  Future<void> _syncActiveClassOnly(String classLabel) async {
+    final response = await http
+        .post(
+          Uri.parse('http://localhost:20020/api/active-class'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'class_id': classLabel}),
+        )
+        .timeout(const Duration(seconds: 10));
+    if (!_isResponseOk(response)) {
+      throw Exception('同步班级失败（HTTP ${response.statusCode}）');
     }
   }
 
@@ -928,6 +939,14 @@ class _DashboardPageState extends State<DashboardPage> {
             selectedIds: _selectedStudentIds,
             onSelectionChanged: (ids) =>
                 setState(() => _selectedStudentIds = ids),
+            onStudentTap: (student) {
+              // 点击学生姓名 → 查看该生打字 / 小测 / AI 对话
+              StudentDetailDialog.show(
+                context,
+                studentId: student.id,
+                studentName: student.name,
+              );
+            },
           ),
         ),
       ],

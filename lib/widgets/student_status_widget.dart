@@ -7,11 +7,15 @@ class StudentStatusWidget extends StatefulWidget {
   final Set<String>? selectedIds;
   final ValueChanged<Set<String>>? onSelectionChanged;
 
+  /// 点击学生姓名时的回调（用于打开学生详情弹窗）
+  final ValueChanged<StudentStatusInfo>? onStudentTap;
+
   const StudentStatusWidget({
     super.key,
     this.classFilter,
     this.selectedIds,
     this.onSelectionChanged,
+    this.onStudentTap,
   });
 
   @override
@@ -150,7 +154,7 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
                               ),
                               children: [
                                 _buildRowCheckboxCell(sorted[i]),
-                                _buildCell(sorted[i].name, bold: true),
+                                _buildNameCell(sorted[i]),
                                 _buildCell(sorted[i].classId),
                                 _buildCell(sorted[i].computerName),
                                 _buildCell(sorted[i].ip),
@@ -194,6 +198,37 @@ class _StudentStatusWidgetState extends State<StudentStatusWidget> {
                   color: const Color(0xFF2563EB),
                 ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 学生姓名单元格：可点击打开详情弹窗
+  Widget _buildNameCell(StudentStatusInfo student) {
+    final canTap = widget.onStudentTap != null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+      child: SizedBox(
+        width: double.infinity,
+        child: MouseRegion(
+          cursor: canTap ? SystemMouseCursors.click : MouseCursor.defer,
+          child: GestureDetector(
+            onTap: canTap ? () => widget.onStudentTap!(student) : null,
+            child: Tooltip(
+              message: canTap ? '点击查看该生的打字、小测与 AI 对话' : '',
+              child: Text(
+                student.name,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: canTap ? const Color(0xFF2563EB) : const Color(0xFF111827),
+                  decoration: canTap ? TextDecoration.underline : null,
+                  decorationColor: const Color(0xFF2563EB),
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ),
         ),
       ),
